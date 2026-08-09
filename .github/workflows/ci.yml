@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (Python 3.9)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install API dependencies
+        run: uv sync --python 3.9 --extra dev --locked
+
+      - name: Test API
+        run: uv run --python 3.9 --extra dev --locked pytest tests/api
+
+      - name: Lint API
+        run: uv run --python 3.9 --extra dev --locked ruff check apps/api tests/api
+
+      - name: Type-check API
+        run: uv run --python 3.9 --extra dev --locked mypy apps/api
+
+  mcp:
+    name: MCP (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: mcp_servers/uv.lock
+
+      - name: Install MCP dependencies
+        run: uv sync --python 3.12 --project mcp_servers --extra dev --locked
+
+      - name: Run standalone MCP tests
+        run: >-
+          uv run --python 3.12 --project mcp_servers --extra dev --locked
+          pytest mcp_servers/tests
+
+      - name: Run API-MCP integration tests
+        run: >-
+          uv run --python 3.12 --project mcp_servers --extra dev --locked
+          pytest tests/integration
+
+      - name: Lint standalone MCP code
+        run: >-
+          uv run --python 3.12 --project mcp_servers --extra dev --locked
+          ruff check mcp_servers/src mcp_servers/tests
+
+      - name: Lint API-MCP integration tests
+        run: >-
+          uv run --python 3.12 --project mcp_servers --extra dev --locked
+          ruff check tests/integration
+
+  web:
+    name: Web (Node 24.15+)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24.15+
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.15"
+          check-latest: true
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Test web
+        run: npm test
+
+      - name: Build web
+        run: npm run build
+
+  submission:
+    name: Verify submission deliverables
+    needs:
+      - api
+      - mcp
+      - web
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Confirm proposal artifacts are committed
+        run: |
+          test -s 'submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pptx'
+          test -s 'submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pdf'
+
+      - name: Verify submission
+        run: python scripts/verify_submission.py

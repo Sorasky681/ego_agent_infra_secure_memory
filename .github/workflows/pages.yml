@@ -1,0 +1,62 @@
+name: Deploy static Research Cockpit to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.15"
+          check-latest: true
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install locked web dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Test Research Cockpit
+        run: npm test
+        working-directory: apps/web
+
+      - name: Build browser-only synthetic replay
+        run: npm run build
+        working-directory: apps/web
+        env:
+          VITE_BASE_PATH: /ego_agent_infra/
+          VITE_STATIC_DEMO: "true"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: apps/web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
