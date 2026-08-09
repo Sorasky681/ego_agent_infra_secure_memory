@@ -1,0 +1,4 @@
+frame-0001,pose-visible
+frame-0002,pose-visible
+frame-0003,pose-missing
+

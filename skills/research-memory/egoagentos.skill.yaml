@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: R1
+idempotency_key: sha256(kind, content, evidence_digest)
+owner_agent: memory-curator
+reviewer_agent: reviewer
+evidence_emitted: [trace]
+registry_state: draft
+

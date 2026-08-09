@@ -1,0 +1,299 @@
+"""FastAPI entrypoint for EgoAgentOS ResearchOps."""
+
+import os
+import uuid
+from typing import Any, Callable, Dict, Optional
+
+from fastapi import FastAPI, Header, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from .errors import ControlPlaneError
+from .models import (
+    AdvanceRequest,
+    ApprovalDecisionRequest,
+    AutorunRequest,
+    DemoResetRequest,
+)
+from .provenance import canonical_sha256
+from .service import ResearchOpsService
+from .store import SQLiteStore
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "req_unknown")
+
+
+def _error_payload(
+    request: Request, code: str, message: str, details: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details or {},
+            "request_id": _request_id(request),
+        }
+    }
+
+
+def _idempotency_key(header_key: Optional[str], body_key: Optional[str]) -> Optional[str]:
+    if header_key and body_key and header_key != body_key:
+        raise ControlPlaneError(
+            "idempotency_key_mismatch",
+            "Header and body idempotency keys must match when both are supplied",
+            400,
+        )
+    key = header_key or body_key
+    if key and not 8 <= len(key) <= 128:
+        raise ControlPlaneError(
+            "invalid_idempotency_key",
+            "Idempotency key length must be between 8 and 128 characters",
+            400,
+        )
+    return key
+
+
+def _run_idempotent(
+    service: ResearchOpsService,
+    method: str,
+    path: str,
+    key: Optional[str],
+    request_body: Dict[str, Any],
+    operation: Callable[[], Dict[str, Any]],
+    cache_response: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    if not key:
+        return operation()
+    request_hash = canonical_sha256(request_body)
+    committed_error: Optional[ControlPlaneError] = None
+    with service.store.transaction():
+        cached = service.store.get_idempotent(method, path, key, request_hash)
+        if cached:
+            _, response = cached
+            response["idempotent_replay"] = True
+            return response
+        try:
+            response = operation()
+        except ControlPlaneError as error:
+            # Evidence-gate failure updates the persisted gate result by design. Commit that
+            # state before returning the structured 409, but do not cache an error response.
+            if error.code != "evidence_gate_failed":
+                raise
+            committed_error = error
+            response = {}
+        if committed_error is None:
+            persisted = cache_response(response) if cache_response else response
+            service.store.put_idempotent(method, path, key, request_hash, 200, persisted)
+    if committed_error is not None:
+        raise committed_error
+    return response
+
+
+def _redact_approval_replay(response: Dict[str, Any]) -> Dict[str, Any]:
+    redacted = dict(response)
+    redacted["approval_token"] = None
+    redacted["token_notice"] = (
+        "One-time token omitted from idempotent replay; request a new approval if it was lost."
+    )
+    return redacted
+
+
+def create_app(
+    db_path: Optional[str] = None, approval_hmac_secret: Optional[str] = None
+) -> FastAPI:
+    resolved_db_path: str = (
+        db_path
+        if db_path is not None
+        else os.getenv("EGO_DB_PATH", "/tmp/egoagentos-researchops.sqlite3")
+    )
+    store = SQLiteStore(resolved_db_path)
+    service = ResearchOpsService(store, approval_hmac_secret=approval_hmac_secret)
+
+    application = FastAPI(
+        title="EgoAgentOS ResearchOps API",
+        description=(
+            "Evidence-gated, deterministic control plane for multi-agent embodied-AI research. "
+            "The bundled EgoLite run is explicitly synthetic."
+        ),
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+    application.state.service = service
+
+    default_origins = ",".join(
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+        ]
+    )
+    origins = [
+        origin.strip()
+        for origin in os.getenv("EGO_CORS_ORIGINS", default_origins).split(",")
+        if origin.strip()
+    ]
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Idempotency-Key", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
+
+    @application.middleware("http")
+    async def request_context(request: Request, call_next: Callable[..., Any]) -> Any:
+        supplied = request.headers.get("X-Request-ID", "")
+        request.state.request_id = supplied[:128] if supplied else "req_%s" % uuid.uuid4().hex
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request.state.request_id
+        return response
+
+    @application.exception_handler(ControlPlaneError)
+    async def control_plane_error(request: Request, error: ControlPlaneError) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=_error_payload(request, error.code, error.message, error.details),
+        )
+
+    @application.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=_error_payload(
+                request,
+                "invalid_request",
+                "Request validation failed",
+                {"violations": jsonable_encoder(error.errors())},
+            ),
+        )
+
+    @application.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
+        code = "not_found" if error.status_code == 404 else "http_error"
+        return JSONResponse(
+            status_code=error.status_code,
+            content=_error_payload(request, code, str(error.detail), {}),
+        )
+
+    @application.get("/api/v1/health", tags=["system"])
+    def health(request: Request) -> Dict[str, Any]:
+        return request.app.state.service.health()
+
+    @application.get("/api/v1/integrations", tags=["system"])
+    def integrations(request: Request) -> Dict[str, Any]:
+        return request.app.state.service.integrations()
+
+    @application.get("/api/v1/dashboard", tags=["research"])
+    def dashboard(request: Request) -> Dict[str, Any]:
+        return request.app.state.service.dashboard()
+
+    @application.get("/api/v1/tasks", tags=["research"])
+    def tasks(request: Request) -> Dict[str, Any]:
+        items = request.app.state.service.list_tasks()
+        return {"items": items, "total": len(items)}
+
+    @application.get("/api/v1/tasks/{task_id}", tags=["research"])
+    def task(task_id: str, request: Request) -> Dict[str, Any]:
+        return request.app.state.service.get_task(task_id)
+
+    @application.post("/api/v1/demo/reset", tags=["demo"])
+    def reset_demo(
+        request: Request,
+        body: Optional[DemoResetRequest] = None,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        payload = body or DemoResetRequest()
+        key = _idempotency_key(idempotency_key, payload.idempotency_key)
+        body_json = payload.model_dump(mode="json", exclude={"idempotency_key"})
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/demo/reset",
+            key,
+            body_json,
+            lambda: request.app.state.service.reset_demo(payload.scenario),
+        )
+
+    @application.post("/api/v1/tasks/{task_id}/advance", tags=["research"])
+    def advance_task(
+        task_id: str,
+        request: Request,
+        body: Optional[AdvanceRequest] = None,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        payload = body or AdvanceRequest()
+        key = _idempotency_key(idempotency_key, payload.idempotency_key)
+        body_json = payload.model_dump(mode="json", exclude={"idempotency_key"})
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/tasks/%s/advance" % task_id,
+            key,
+            body_json,
+            lambda: request.app.state.service.advance(
+                task_id, payload.target, payload.approval_token
+            ),
+        )
+
+    @application.post("/api/v1/tasks/{task_id}/autorun", tags=["research"])
+    def autorun_task(
+        task_id: str,
+        request: Request,
+        body: Optional[AutorunRequest] = None,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        payload = body or AutorunRequest()
+        key = _idempotency_key(idempotency_key, payload.idempotency_key)
+        body_json = payload.model_dump(mode="json", exclude={"idempotency_key"})
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/tasks/%s/autorun" % task_id,
+            key,
+            body_json,
+            lambda: request.app.state.service.autorun(task_id, payload.approval_token),
+        )
+
+    @application.post("/api/v1/approvals/{approval_id}/decision", tags=["approval"])
+    def approval_decision(
+        approval_id: str,
+        body: ApprovalDecisionRequest,
+        request: Request,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        key = _idempotency_key(idempotency_key, None)
+        body_json = body.model_dump(mode="json")
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/approvals/%s/decision" % approval_id,
+            key,
+            body_json,
+            lambda: request.app.state.service.decide_approval(
+                approval_id, body.decision.value, body.approver, body.expected_digest
+            ),
+            cache_response=_redact_approval_replay,
+        )
+
+    @application.get("/api/v1/tasks/{task_id}/events", tags=["audit"])
+    def task_events(
+        task_id: str,
+        request: Request,
+        after_sequence: int = Query(default=0, ge=0),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> Dict[str, Any]:
+        return request.app.state.service.events(task_id, after_sequence, limit)
+
+    return application
+
+
+app = create_app()

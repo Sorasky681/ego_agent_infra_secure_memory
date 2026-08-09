@@ -1,0 +1,10 @@
+{
+  "schema": "egoagentos.resource-sample.v1",
+  "synthetic": true,
+  "phase": "after_manifest_reuse",
+  "gpu_utilization_percent": [76, 81, 74, 79, 82, 77, 75, 80],
+  "cpu_utilization_percent": 62,
+  "dataloader_wait_percent": 18,
+  "diagnostic_signal": "manifest_digest_verified"
+}
+

@@ -1,0 +1,41 @@
+schema: egoagentos.agentteams-blueprint.v1
+name: egoagentos-researchops
+mode: manager-worker
+source_of_truth: egoagentos-control-plane-api
+room_policy:
+  scope: agentteams-managed-with-task-correlation
+  task_key: task_id
+  human_observable: true
+  human_approval_transport: api-only
+manager:
+  identity: ../../agents/research-pi.yaml
+  owns: [control_flow, task_decomposition, result_aggregation]
+workers:
+  - ../../agents/scout.yaml
+  - ../../agents/experiment-architect.yaml
+  - ../../agents/runtime.yaml
+  - ../../agents/evaluator.yaml
+  - ../../agents/reviewer.yaml
+  - ../../agents/memory-curator.yaml
+command_transport:
+  schema: ./message-envelope.schema.json
+  accepted_kinds: [command, artifact_ref, review, status, approval_request]
+  rejects: [raw_shell, embedded_secret, unbound_metric, chat_approval]
+state_mapping:
+  INTAKE: research-pi
+  CONTEXT: scout
+  PLAN: experiment-architect
+  PLAN_REVIEW: reviewer
+  APPROVAL: research-pi
+  EXECUTE: runtime
+  OBSERVE: runtime
+  EVALUATE: evaluator
+  VERIFY: reviewer
+  DECIDE: research-pi
+  ARCHIVE: research-pi
+  MEMORY_SKILL: memory-curator
+security:
+  external_calls: higress-consumer-token
+  upstream_secrets_in_workers: forbidden
+  state_mutation: control-plane-api-only
+  r2_r3_approval: scoped-api-token-only

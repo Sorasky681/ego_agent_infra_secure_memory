@@ -1,0 +1,27 @@
+schema: egoagentos.experiment-plan.v1
+task_id: ego-lite-001
+synthetic: true
+baseline:
+  id: baseline-ltx
+  entrypoint: benchmark_stream
+  config: configs/baseline-ltx.yaml
+candidates:
+  - id: mobilenetv4-tsm-gru
+    entrypoint: benchmark_stream
+    config: configs/mobilenetv4-tsm-gru.yaml
+  - id: movinet-a0-stream
+    entrypoint: benchmark_stream
+    config: configs/movinet-a0-stream.yaml
+  - id: repvit-tsm-gru
+    entrypoint: benchmark_stream
+    config: configs/repvit-tsm-gru.yaml
+seeds: [11, 23, 37]
+fixed_split: synthetic-egolite-eval-v1
+estimated_gpu_hours: 24
+risk_level: R2
+requires_human_approval: true
+falsification:
+  - any candidate fails to exceed 10 fps
+  - MPJPE relative degradation exceeds 5 percent
+rollback: Restore baseline-ltx configuration pointer; preserve all failed-run evidence.
+

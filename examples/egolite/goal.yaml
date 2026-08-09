@@ -1,0 +1,31 @@
+schema: egoagentos.research-goal.v1
+task_id: ego-lite-001
+synthetic: true
+title: Lightweight streaming perception for EgoLite-PWM
+objective: Replace the heavy video representation with a streaming backbone suitable for a future action head.
+constraints:
+  hardware_profile: synthetic_8x_rtx4090
+  max_gpu_hours: 24
+  fixed_sample_count: 100
+  data_policy: immutable_fixture_only
+metrics:
+  - name: fps
+    unit: frames_per_second
+    direction: higher_better
+    threshold: 10.0
+  - name: mpjpe
+    unit: millimeter
+    direction: lower_better
+    maximum_relative_degradation: 0.05
+  - name: end_to_end_latency
+    unit: millisecond
+    direction: lower_better
+  - name: vram
+    unit: gibibyte
+    direction: lower_better
+acceptance:
+  all:
+    - fps >= 10.0
+    - candidate_mpjpe <= baseline_mpjpe * 1.05
+disclaimer: Thresholds are product acceptance criteria, not measured claims.
+

@@ -1,0 +1,228 @@
+# EgoAgentOS ResearchOps
+
+> Evidence-Gated Multi-Agent Research Infrastructure for Embodied AI  
+> 把「提出想法」变成可审批、可复现、可独立验证、可积累的研究生产链。
+
+EgoAgentOS 不是泛化聊天式 AI Scientist。它聚焦具身智能实验室里最难治理的一段流程：
+
+```text
+Research Goal → Context → Hypothesis / Plan → Approval → Execution
+→ Observation → Deterministic Evaluation → Independent Verification
+→ Decision → Archive → Validated Memory → Skill Candidate
+```
+
+系统采用 **Deterministic Core + LLM Residual**：Agent 可以理解目标、提出假设和解释结果；状态迁移、风险策略、审批范围、指标计算、证据完整性、哈希与审计由确定性代码执行。Planner、Executor、Evaluator、Reviewer 相互分离，任何 Agent 都不能自证闭环。
+
+## 先运行
+
+在线静态 Demo：[https://mythrise.github.io/ego_agent_infra/](https://mythrise.github.io/ego_agent_infra/)
+
+GitHub Pages 使用浏览器内确定性回放，可以步进或 autorun，并完整演示 R2 审批锁、`7/7 · HOLD → PASS`、`KEEP` 决策与移动端导航。页面与所有数据始终标记为 **SYNTHETIC / STATIC REPLAY**；该托管版本不调用后端 API、MCP、AgentTeams、Higress、Nacos 或 GPU，也不产生真实审批签名。它展示的是本仓库可复现控制语义的公开 fixture，不是在线研究运行证明。
+
+静态构建可在本地复现：
+
+```bash
+VITE_STATIC_DEMO=true VITE_BASE_PATH=/ego_agent_infra/ npm --prefix apps/web run build
+```
+
+`.github/workflows/pages.yml` 会在 `main` 分支推送后使用锁定依赖运行 Web 测试、构建 `/ego_agent_infra/` 基路径 artifact，并部署到 GitHub Pages。`dist/404.html` 由构建脚本生成，用于 SPA 路径回退。
+
+完整本地 API 模式与静态回放共用同一个 Research Cockpit：未强制设置 `VITE_STATIC_DEMO=true` 时，Web 会先连接 `VITE_API_ROOT`；只有在初始连接不可达时才自动降级为静态回放。一旦已连接本地 API，后续故障会显式报错，不会悄然切换成 fixture。
+
+本地评委复现只需要 Docker：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+打开：
+
+- Research Cockpit：<http://localhost:4173>
+- OpenAPI：<http://localhost:8000/docs>
+- Health：<http://localhost:8000/api/v1/health>
+
+默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、SQLite 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 AgentTeams、Nacos 或 Higress 在线状态。
+
+若不使用 Docker：
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
+uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
+
+npm --prefix apps/web ci
+VITE_API_ROOT=http://127.0.0.1:8000/api/v1 npm --prefix apps/web run dev -- --port 4173
+```
+
+## 本地 API 模式：6 分钟 Judge Replay
+
+以下流程针对 `docker compose` 或原生 FastAPI 启动的本地控制面；在 GitHub
+Pages 静态 Demo 中，同样的操作只会生成浏览器内 synthetic grant 与 fixture
+状态，不会签发服务端 token。
+
+1. 点击 **Reset demo**，确认页面始终显示 `SYNTHETIC DEMO`。
+2. 点击 **Run to next gate**。流程会持久化推进到 `APPROVAL`，而不是直接完成。
+3. 在审批中心核对 R2、8 GPU / 24 GPU·hour 预算、精确 action digest、15 分钟有效期与回滚点。未审批时执行按钮保持锁定。
+4. 点击 Approve。浏览器只在当前会话保存服务端一次性返回的 scope-bound token。
+5. 再次点击 **Run to next gate**，确定性角色处理器会推进 Execute → Observe → Evaluate → Verify → Decide → Archive → Memory/Skill → Completed。
+6. 查看 baseline/candidate 原始样本、固定种子 paired bootstrap、7/7 Evidence Ledger、独立 Reviewer、hash-chained audit 与 `KEEP` 决策。
+7. 打开 Memory/Skill：验证过的过程记忆只有 1/3 支持度，仍为 candidate，未伪装成已发布 Nacos Skill。
+8. 可通过 API 将 reset 场景改为 `insufficient_evidence`；该分支故意缺少 trace，并在 VERIFY 阻断决策。
+
+完整讲解见 [docs/demo-runbook.md](docs/demo-runbook.md)。
+
+## 架构
+
+```mermaid
+flowchart TB
+  H["Researcher / Human Approver"] --> UI["Research Cockpit"]
+  UI --> CP["Deterministic Control Plane\nstate · policy · approval · evidence · audit"]
+  CP --> A["Local deterministic role handlers\n7 Agent identity contracts"]
+  CP --> DB["SQLite local source of truth\nPostgreSQL / PolarDB adapter-ready"]
+  CP --> X["Explicitly synthetic EgoLite execution"]
+  S["6 versioned Skill contracts"] -. workflow contract .-> A
+  T["4 MCP servers / 7 typed tools"] -. execution profile .-> CP
+  AT["AgentTeams / Matrix deployment contract"] -. typed envelopes .-> A
+  HG["Higress route policy"] -. not deployed .-> T
+  NC["Nacos publish policy"] -. not deployed .-> S
+```
+
+实线是当前本地运行路径；虚线是可部署合同或显式 execution profile。默认 Web replay 不调用 AgentTeams、Skill runtime 或 MCP，也不会把角色标签冒充成真实 Matrix 会话。
+
+任务状态机固定为：
+
+```text
+INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
+→ EVALUATE → VERIFY → DECIDE → ARCHIVE → MEMORY_SKILL → COMPLETED
+```
+
+任务 stage 与 run status 分离；所有迁移只能经过 control plane。非法跳转、证据不足、过期/错 scope/重放 token 都会产生结构化错误并保留审计事实。
+
+设计详解：[architecture](docs/architecture.md) · [state machine](docs/state-machine.md) · [security](docs/security.md) · [observability](docs/observability.md) · [evaluation](docs/evaluation.md)
+
+## 7 个 Agent Identity
+
+| Identity | AgentTeams role | 只负责 | 明确禁止 |
+|---|---|---|---|
+| Research PI | Manager | 冻结目标、路由、状态/Decision | 修改 raw metrics |
+| Scout | Worker | repo/data/历史失败 ContextBundle | 启动训练 |
+| Experiment Architect | Worker | 假设、实验矩阵、预算、验伪条件 | 审批自己的方案 |
+| Runtime | Worker | allowlisted 提交合同、观测与日志 | 任意 shell |
+| Evaluator | Worker | 确定性指标与 bootstrap | 修改 checkpoint |
+| Independent Reviewer | Worker | 计划与结果独立审查 | 启动被审实验 |
+| Memory Curator | Worker | validated memory 与 Skill candidate | 把推测写成事实 |
+
+机器可读身份位于 [`agents/`](agents/)。AgentTeams/HiClaw v1beta1 Manager–Worker 资源模板与消息 envelope 位于 [`integrations/agentteams/`](integrations/agentteams/)。Matrix 是协作/观察平面，数据库始终是 source of truth。
+
+## 6 个 Skill Package
+
+[`skills/`](skills/) 内含 `research-plan`、`dataset-manifest`、`safe-experiment-runner`、`ablation-analyzer`、`evidence-gate`、`research-memory`。每个包都有：
+
+- 可移植 `SKILL.md` 与项目扩展 manifest；
+- typed inputs/outputs、触发条件和依赖；
+- 失败状态、风险/审批、幂等性与复用规则；
+- draft → review → publish 的诚实发布边界。
+
+## 4 组 MCP / 7 个受限工具
+
+[`mcp_servers/`](mcp_servers/) 使用官方 Python SDK `mcp==2.0.0`：
+
+| Server | Tools | 确定性约束 |
+|---|---|---|
+| repo | `repo_snapshot`, `repo_read_files` | 只读、trusted root、拒绝 symlink/credential path、redaction |
+| dataset | `dataset_create_manifest`, `dataset_verify_manifest` | canonical SHA-256、首次发布后不可覆盖、完整重验 |
+| gpu | `gpu_launch_experiment`, `gpu_job_status` | dry-run 默认、枚举 entrypoint、config digest、argv + `shell=False`、R1/R2 policy |
+| metrics | `metrics_compare_paired` | 固定种子、2000 次 paired bootstrap |
+
+安装与测试：
+
+```bash
+uv sync --python 3.12 --project mcp_servers --extra dev
+uv run --python 3.12 --project mcp_servers pytest mcp_servers/tests
+```
+
+这里没有万能 `shell(command)`。GPU server 默认不执行；显式开启后也只运行打包的 harmless synthetic worker。四个 server 默认使用 stdio，也支持显式 loopback Streamable HTTP profile；这不等于 Higress 或 AgentTeams 已连接。完整安全合同见 [mcp_servers/README.md](mcp_servers/README.md)。
+
+API 与 GPU MCP 共享 [`contracts/approval-token-v1.json`](contracts/approval-token-v1.json)。设置同一个至少 32 字节的 `EGO_MCP_APPROVAL_HMAC_SECRET` 后，API 审批会签发 MCP 可独立验签、限时且单次消费的 `egoap1` token；跨 Python 3.9/3.12 集成测试覆盖 dry-run 摘要一致、一次受控 synthetic launch 与 replay 拒绝。默认留空时，Web 使用 `egoap_` 会话 token 完成本地控制面 replay，但该 token 不具备 MCP 互操作性。
+
+## Evidence Gate 与安全不变量
+
+Decision 前必须具备且校验七类证据：`code`、`config`、`dataset_manifest`、`log`、`metric`、`trace`、`review`。Reviewer 必须独立；LLM summary 不能代替 raw metric artifact。
+
+- R0：只读动作，自动执行并审计。
+- R1：单 GPU、≤2 GPU·hour、sandbox-only bounded mutation。
+- R2：多 GPU / 显著计算或数据变更，必须人工审批。
+- R3：删除、push main、发布模型、部署等不可逆外部动作，还必须绑定 rollback point。
+- approval token 绑定 task generation、scope、action digest、expiry 与 nonce，且只能消费一次。
+- RunManifest 以 canonical serialization 绑定 commit、config、dataset、environment、base model 与 seed。
+- audit events 追加写入并 hash-chain；错误和工具输出统一做 secret redaction。
+
+威胁模型与测试矩阵见 [docs/security.md](docs/security.md)。
+
+## 测试与提交验收
+
+完整本地测试：
+
+```bash
+make install
+make test
+```
+
+分项运行：
+
+```bash
+make test-api     # backend domain/API
+make check-api    # Ruff + MyPy
+make test-mcp     # MCP policy/security/tool contracts (Python 3.12 + uv)
+make test-web     # Vitest + production build
+make verify       # agents/skills/fixtures/claims/secret scan
+```
+
+生成确定性提交包：
+
+```bash
+make package
+```
+
+输出为 `submission/dist/EgoAgentOS_GOAI_Initial.zip`。构建器只打包显式 allowlist，不包含 `.env`、SQLite、缓存、`node_modules` 或本机凭据。
+
+## 目录
+
+```text
+apps/api/                 FastAPI + SQLite deterministic control plane
+apps/web/                 React Research Cockpit
+agents/                   7 Agent identity contracts
+skills/                   6 reusable Skill packages
+mcp_servers/              4 MCPServer processes / 7 tools
+integrations/             AgentTeams, Higress, Nacos, Aliyun adapter contracts
+examples/egolite/         explicitly synthetic fixtures and experiment plan
+tests/                    backend domain/API tests
+docs/                     architecture, security, evaluation, trace, claims
+submission/               ≤500 字简介、答辩稿、演示与提交清单
+```
+
+## 集成状态与 claim 边界
+
+当前可验证的是本地 deterministic ResearchOps 闭环。外部集成只有在配置并完成真实 handshake 后才允许显示为 verified：
+
+| Integration | 本仓库状态 | 不做的虚假声明 |
+|---|---|---|
+| AgentTeams / HiClaw | v1beta1 可渲染资源 + envelope deployment contract | 不声称 Matrix room 已在线 |
+| Nacos | Skill package + review/publish policy contract | 不声称 Skill 已上线 |
+| Higress | 精确 MCP route / credential policy contract | 不声称 gateway 已部署或完成 secret-isolation 负测 |
+| Aliyun SLS Skill | 只读官方 Skill 选择与 lock | 不声称已查询真实项目日志 |
+| GPU / EgoLite | synthetic fixtures + bounded launcher | 不声称跑过 8×RTX 4090 或真实数据 |
+
+每条演示/答辩 claim 都应能回指当前仓库证据，见 [docs/claims-evidence.md](docs/claims-evidence.md)。
+
+## GOAI Agent Infra 对齐
+
+本项目按 2026-08-09 可见赛道要求设计：≥3 Agent、AgentTeams 协同基点、Agent Identity、Skill 工程化、完整闭环，以及 shared state / validated memory / trace。评分映射见 [docs/competition-mapping.md](docs/competition-mapping.md)，提交简介与材料见 [`submission/`](submission/)。
+
+官方页面：[Agent Infra 赛道](https://www.goaihz.com/tracks?track=infra) · [提交入口](https://www.goaihz.com/submission)
+
+## License
+
+Apache License 2.0。示例数字全部为 synthetic fixture，只用于复现系统行为；不构成模型性能声明。第三方与数据/模型边界分别见 [THIRD_PARTY.md](THIRD_PARTY.md)、[DATA_CARD.md](DATA_CARD.md)、[MODEL_CARD.md](MODEL_CARD.md)。

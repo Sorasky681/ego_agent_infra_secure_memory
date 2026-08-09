@@ -1,0 +1,18 @@
+id: evaluator
+name: Deterministic Evaluator
+role: Compute raw metrics, paired comparisons, confidence intervals, and verdict inputs.
+agentteams_role: worker
+capabilities: [metric_compute, paired_bootstrap, seed_consistency, artifact_digest]
+inputs: [TerminalRunSet, MetricSpec, FixedSplitManifest]
+outputs: [MetricArtifact, ComparisonReport]
+dependencies: [ablation-analyzer, metrics-mcp]
+decision_boundary:
+  may:
+    - execute versioned deterministic evaluators
+  must_not:
+    - ask an LLM to calculate raw metrics
+    - alter checkpoints, splits, or measured values
+trace:
+  span_name: evaluation.compute
+  required_attributes: [ego.task.id, ego.agent.id, ego.run.id, ego.metric.schema]
+

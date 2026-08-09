@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: R0
+idempotency_key: sha256(input_artifact_digests, evaluator_version, bootstrap_seed)
+owner_agent: evaluator
+reviewer_agent: reviewer
+evidence_emitted: [metric, trace]
+registry_state: draft
+

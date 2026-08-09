@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: dynamic
+idempotency_key: caller_supplied_bound_to_action_digest
+owner_agent: runtime
+reviewer_agent: reviewer
+evidence_emitted: [code, config, log, trace]
+registry_state: draft
+

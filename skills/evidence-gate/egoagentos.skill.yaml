@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: R0
+idempotency_key: sha256(task_id, evidence_ledger_digest, gate_policy_version)
+owner_agent: reviewer
+reviewer_agent: research-pi
+evidence_emitted: [review, trace]
+registry_state: draft
+

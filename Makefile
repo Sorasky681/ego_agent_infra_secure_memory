@@ -1,0 +1,51 @@
+PYTHON ?= python3
+UV ?= uv
+API_URL ?= http://127.0.0.1:8000
+
+.PHONY: install install-api install-mcp install-web test test-api check-api test-web test-mcp verify openapi up down logs package
+
+install: install-api install-mcp install-web
+
+install-api:
+	$(UV) sync --python 3.9 --extra dev
+
+install-mcp:
+	$(UV) sync --python 3.12 --project mcp_servers --extra dev
+
+install-web:
+	npm --prefix apps/web ci
+
+test: test-api check-api test-mcp test-web verify
+
+test-api:
+	$(UV) run --python 3.9 --extra dev pytest tests/api
+
+check-api:
+	$(UV) run --python 3.9 --extra dev ruff check apps/api tests/api
+	$(UV) run --python 3.9 --extra dev mypy apps/api
+
+test-web:
+	npm --prefix apps/web test
+	npm --prefix apps/web run build
+
+test-mcp:
+	$(UV) run --python 3.12 --project mcp_servers --extra dev pytest mcp_servers/tests tests/integration
+	$(UV) run --python 3.12 --project mcp_servers --extra dev ruff check mcp_servers/src mcp_servers/tests tests/integration
+
+verify:
+	$(PYTHON) scripts/verify_submission.py
+
+openapi:
+	$(UV) run --python 3.9 --extra dev python scripts/export_openapi.py
+
+up:
+	docker compose up --build
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f --tail=200
+
+package: openapi
+	$(PYTHON) scripts/build_submission.py

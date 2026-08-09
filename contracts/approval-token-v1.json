@@ -1,0 +1,46 @@
+{
+  "schema": "egoagentos.approval-contract.v1",
+  "canonical_json": {
+    "encoding": "UTF-8",
+    "ensure_ascii": false,
+    "allow_nan": false,
+    "sort_keys": true,
+    "separators": [",", ":"]
+  },
+  "token": {
+    "prefix": "egoap1",
+    "algorithm": "HMAC-SHA256",
+    "maximum_bytes": 4096,
+    "maximum_ttl_seconds": 900,
+    "claims": [
+      "version",
+      "jti",
+      "action",
+      "scope",
+      "action_digest",
+      "config_sha256",
+      "issued_at",
+      "expires_at"
+    ]
+  },
+  "gpu_launch": {
+    "action": "gpu.launch_experiment",
+    "scope_template": "gpu.launch:{experiment_id}:{idempotency_key}",
+    "digest_envelope": {
+      "action_key": "action",
+      "payload_key": "payload"
+    },
+    "payload_fields": [
+      "experiment_id",
+      "idempotency_key",
+      "entrypoint",
+      "config_path",
+      "config_sha256",
+      "gpu_ids",
+      "seed",
+      "expected_gpu_hours",
+      "tags"
+    ],
+    "excluded_transport_fields": ["approval_token", "dry_run"]
+  }
+}

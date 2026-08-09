@@ -1,0 +1,15 @@
+{
+  "schema": "egoagentos.raw-metric.v1",
+  "synthetic": true,
+  "run_id": "run-repvit-s11",
+  "split": "synthetic-egolite-eval-v1",
+  "metrics": {
+    "fps": 12.4,
+    "end_to_end_latency_ms": 80.6,
+    "mpjpe_mm": 43.1,
+    "pa_mpjpe_mm": 31.4,
+    "vram_gib": 7.9
+  },
+  "paired_mpjpe_mm": [40.9, 42.6, 44.0, 43.7, 42.4, 45.1, 42.0, 43.9]
+}
+

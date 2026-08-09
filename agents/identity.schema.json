@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://egoagentos.dev/schemas/agent-identity.v1.json",
+  "title": "EgoAgentOS Agent Identity",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "role",
+    "agentteams_role",
+    "capabilities",
+    "inputs",
+    "outputs",
+    "dependencies",
+    "decision_boundary",
+    "trace"
+  ],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "name": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "agentteams_role": {"enum": ["manager", "worker"]},
+    "capabilities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "inputs": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "outputs": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "dependencies": {"type": "array", "items": {"type": "string"}},
+    "decision_boundary": {
+      "type": "object",
+      "required": ["may", "must_not"],
+      "properties": {
+        "may": {"type": "array", "items": {"type": "string"}},
+        "must_not": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      }
+    },
+    "trace": {
+      "type": "object",
+      "required": ["span_name", "required_attributes"],
+      "properties": {
+        "span_name": {"type": "string"},
+        "required_attributes": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "additionalProperties": false
+}
+

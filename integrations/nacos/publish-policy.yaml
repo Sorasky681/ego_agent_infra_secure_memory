@@ -1,0 +1,24 @@
+schema: egoagentos.skill-publish-policy.v1
+minimum_verified_successes: 3
+required_reviews:
+  independent_reviewer: PASS
+  human_maintainer: APPROVED
+required_artifacts:
+  - SKILL.md
+  - egoagentos.skill.yaml
+required_checks:
+  - package_digest_matches
+  - no_secret_patterns
+  - no_path_escape
+  - scripts_are_allowlisted
+  - source_evidence_closure
+registry_mapping:
+  candidate: none
+  draft: draft
+  security_review: reviewing
+  published: online
+  retired: offline
+rollback:
+  action: restore_previous_stable_label
+  audit_required: true
+

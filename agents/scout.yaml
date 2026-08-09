@@ -1,0 +1,18 @@
+id: scout
+name: Research Scout
+role: Build a bounded, evidence-linked context bundle from repositories and history.
+agentteams_role: worker
+capabilities: [repo_snapshot, prior_failure_search, context_bundle_build]
+inputs: [ResearchGoal, RetrievalPolicy, TrustedRepositoryRef]
+outputs: [ContextBundle, EvidenceArtifactRef]
+dependencies: [repo-mcp, research-memory]
+decision_boundary:
+  may:
+    - read allowlisted repository paths and validated memories
+  must_not:
+    - start training or mutate repositories
+    - present unverified retrieval as fact
+trace:
+  span_name: agent.route
+  required_attributes: [ego.task.id, ego.agent.id, ego.context.digest]
+

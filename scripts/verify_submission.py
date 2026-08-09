@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Fail-fast repository checks used before building the GOAI submission ZIP."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+from build_submission import included_files
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_AGENT_FIELDS = (
+    "id:",
+    "name:",
+    "role:",
+    "agentteams_role:",
+    "capabilities:",
+    "inputs:",
+    "outputs:",
+    "dependencies:",
+    "decision_boundary:",
+    "trace:",
+)
+REQUIRED_SKILL_SECTIONS = (
+    "## Contract",
+    "## Failure and safety",
+    "## Verification and reuse",
+)
+SECRET_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+)
+REQUIRED_DELIVERABLES = (
+    ".dockerignore",
+    ".env.example",
+    ".github/workflows/ci.yml",
+    ".github/workflows/pages.yml",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "contracts/approval-token-v1.json",
+    "docker-compose.yml",
+    "docs/openapi.json",
+    "mcp_servers/pyproject.toml",
+    "mcp_servers/uv.lock",
+    "pyproject.toml",
+    "requirements-api.lock",
+    "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pdf",
+    "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pptx",
+    "submission/project-summary-zh.txt",
+    "submission/verification-report.md",
+    "uv.lock",
+)
+
+
+def check(condition: bool, message: str, failures: List[str]) -> None:
+    if not condition:
+        failures.append(message)
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def validate_agents(failures: List[str]) -> None:
+    identity_files = sorted(
+        path for path in (ROOT / "agents").glob("*.yaml") if path.name != "README.md"
+    )
+    check(len(identity_files) == 7, "expected exactly seven Agent identity YAML files", failures)
+    for path in identity_files:
+        content = read_text(path)
+        for field in REQUIRED_AGENT_FIELDS:
+            check(field in content, "%s missing %s" % (path, field), failures)
+
+
+def validate_skills(failures: List[str]) -> None:
+    skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
+    check(len(skill_files) == 6, "expected exactly six core Skill packages", failures)
+    for path in skill_files:
+        content = read_text(path)
+        check(content.startswith("---\n"), "%s missing YAML frontmatter" % path, failures)
+        check("name:" in content and "description:" in content, "%s frontmatter incomplete" % path, failures)
+        for heading in REQUIRED_SKILL_SECTIONS:
+            check(heading in content, "%s missing section %s" % (path, heading), failures)
+        manifest = path.parent / "egoagentos.skill.yaml"
+        check(manifest.exists(), "%s missing EgoAgentOS extension manifest" % path.parent, failures)
+
+
+def validate_fixtures(failures: List[str]) -> None:
+    fixtures = sorted((ROOT / "examples" / "egolite" / "fixtures").glob("*.json"))
+    check(bool(fixtures), "no EgoLite JSON fixtures found", failures)
+    for path in fixtures:
+        payload = json.loads(read_text(path))
+        check(payload.get("synthetic") is True, "%s is not explicitly synthetic" % path, failures)
+
+
+def validate_summary(failures: List[str]) -> None:
+    path = ROOT / "submission" / "project-summary-zh.txt"
+    content = read_text(path)
+    character_count = len(content.strip())
+    check(character_count <= 500, "project summary exceeds 500 characters", failures)
+    check("synthetic" in content, "project summary must disclose synthetic evidence", failures)
+
+
+def validate_truth_labels(failures: List[str]) -> None:
+    ledger = read_text(ROOT / "docs" / "claims-evidence.md")
+    for phrase in ("8×RTX 4090 experiment ran", "AgentTeams Matrix collaboration is live", "Nacos Skill is published"):
+        check(phrase in ledger, "claims ledger omits boundary: %s" % phrase, failures)
+
+
+def validate_shared_contracts(failures: List[str]) -> None:
+    contract_path = ROOT / "contracts" / "approval-token-v1.json"
+    check(contract_path.exists(), "shared approval-token contract is missing", failures)
+    if contract_path.exists():
+        contract = json.loads(read_text(contract_path))
+        check(contract.get("token", {}).get("prefix") == "egoap1", "approval prefix mismatch", failures)
+        fields = contract.get("gpu_launch", {}).get("payload_fields", [])
+        check("config_sha256" in fields, "GPU approval payload is not config-bound", failures)
+    check(
+        (ROOT / "apps" / "api" / "fixtures" / "egolite-mcp-launch.yaml").exists(),
+        "config bytes referenced by the GPU approval contract are missing",
+        failures,
+    )
+
+
+def validate_required_deliverables(failures: List[str]) -> None:
+    packaged = {path.relative_to(ROOT).as_posix() for path in included_files()}
+    for relative in REQUIRED_DELIVERABLES:
+        path = ROOT / relative
+        check(path.is_file(), "required deliverable is missing: %s" % relative, failures)
+        check(not path.is_symlink(), "required deliverable cannot be a symlink: %s" % relative, failures)
+        check(relative in packaged, "required deliverable is excluded from ZIP: %s" % relative, failures)
+
+    pptx = ROOT / "submission" / "EgoAgentOS_GOAI_Agent_Infra_初赛方案.pptx"
+    pdf = ROOT / "submission" / "EgoAgentOS_GOAI_Agent_Infra_初赛方案.pdf"
+    if pptx.is_file():
+        check(pptx.stat().st_size > 10_000, "proposal PPTX is unexpectedly small", failures)
+        check(pptx.read_bytes()[:2] == b"PK", "proposal PPTX signature is invalid", failures)
+    if pdf.is_file():
+        check(pdf.stat().st_size > 10_000, "proposal PDF is unexpectedly small", failures)
+        check(pdf.read_bytes()[:5] == b"%PDF-", "proposal PDF signature is invalid", failures)
+
+
+def scan_secrets(failures: List[str]) -> None:
+    """Scan exactly the files that can enter the deterministic submission ZIP."""
+
+    for path in sorted(set(included_files())):
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".pdf", ".pptx", ".zip", ".woff", ".woff2"}:
+            continue
+        try:
+            content = read_text(path)
+        except UnicodeDecodeError:
+            continue
+        for pattern in SECRET_PATTERNS:
+            if pattern.search(content):
+                failures.append("possible committed secret in %s (%s)" % (path, pattern.pattern))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    args = parser.parse_args()
+
+    failures: List[str] = []
+    validate_agents(failures)
+    validate_skills(failures)
+    validate_fixtures(failures)
+    validate_summary(failures)
+    validate_truth_labels(failures)
+    validate_shared_contracts(failures)
+    validate_required_deliverables(failures)
+    scan_secrets(failures)
+
+    result: Dict[str, object] = {
+        "status": "PASS" if not failures else "FAIL",
+        "checks": 8,
+        "failures": failures,
+    }
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print("submission verification: %s" % result["status"])
+        for failure in failures:
+            print("- %s" % failure)
+    return 0 if not failures else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

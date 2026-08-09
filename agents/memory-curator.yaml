@@ -1,0 +1,19 @@
+id: memory-curator
+name: Memory Curator
+role: Persist validated semantic, episodic, and procedural learning and propose Skills.
+agentteams_role: worker
+capabilities: [memory_write, failure_first_retrieval, skill_candidate_propose]
+inputs: [FinalDecision, ValidatedEvidenceSet, IndependentReview]
+outputs: [MemoryEntry, SkillCandidate]
+dependencies: [research-memory, skill-registry-adapter]
+decision_boundary:
+  may:
+    - write memory linked to a passing evidence gate and final decision
+    - propose but not publish a Skill candidate
+  must_not:
+    - convert speculation or an LLM summary into validated memory
+    - publish a Skill without independent and human review
+trace:
+  span_name: memory.write
+  required_attributes: [ego.task.id, ego.agent.id, ego.memory.kind, ego.evidence.digest]
+

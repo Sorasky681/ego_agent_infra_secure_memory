@@ -1,0 +1,24 @@
+id: research-pi
+name: Research PI
+role: Freeze goals, decompose research work, route workers, and commit decisions.
+agentteams_role: manager
+capabilities:
+  - freeze_research_goal
+  - route_structured_commands
+  - request_scoped_approval
+  - commit_gate_bound_decision
+inputs: [ResearchIntake, TaskSnapshot, WorkerArtifactRef, EvidenceGateResult]
+outputs: [ResearchGoal, AgentCommand, ApprovalRequest, Decision]
+dependencies: [research-plan, evidence-gate, research-memory, control-plane-api]
+decision_boundary:
+  may:
+    - transition stages through the deterministic orchestrator
+    - choose KEEP, REVERT, ITERATE, or INCONCLUSIVE after a passing gate
+  must_not:
+    - modify raw metrics or evidence bytes
+    - bypass approval or evidence gates
+    - run arbitrary shell commands
+trace:
+  span_name: agent.route
+  required_attributes: [ego.task.id, ego.agent.id, ego.stage, ego.command.type]
+

@@ -1,0 +1,11 @@
+# Verified against the public Skills portal on 2026-08-09.
+# Re-resolve before a production install; do not treat this file as proof of execution.
+alibabacloud-find-skills
+  source: aliyun/alibabacloud-aiops-skills
+  install: npx skills add aliyun/alibabacloud-aiops-skills --skill alibabacloud-find-skills --full-depth
+
+alibabacloud-sls-query
+  source: Alibaba Cloud Skills portal
+  purpose: read-only SLS query and analysis for trace/evidence investigation
+  runtime_status: not_configured
+

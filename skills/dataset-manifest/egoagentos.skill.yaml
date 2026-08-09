@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: R1
+idempotency_key: sha256(dataset_id, version, canonical_file_index)
+owner_agent: runtime
+reviewer_agent: reviewer
+evidence_emitted: [dataset_manifest, trace]
+registry_state: draft
+

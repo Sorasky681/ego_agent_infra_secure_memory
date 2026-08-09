@@ -1,0 +1,8 @@
+version: 0.1.0
+risk_level: R0
+idempotency_key: sha256(goal_digest, context_digest, planner_version)
+owner_agent: experiment-architect
+reviewer_agent: reviewer
+evidence_emitted: [config, trace, review]
+registry_state: draft
+
