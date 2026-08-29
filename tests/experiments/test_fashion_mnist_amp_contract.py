@@ -53,6 +53,12 @@ def config_fixture() -> dict[str, object]:
             "max_gpu_hours": 0.25,
             "max_download_bytes": 1024,
         },
+        "determinism": {
+            "cublas_workspace_config": ":4096:8",
+            "deterministic_algorithms": True,
+            "cudnn_benchmark": False,
+            "tf32": False,
+        },
         "seed": 42,
     }
 
@@ -90,6 +96,12 @@ def raw_fixture() -> dict[str, object]:
                 "cuda_available": True,
                 "visible_device_count": 1,
                 "name": "test-gpu",
+            },
+            "determinism": {
+                "cublas_workspace_config": ":4096:8",
+                "deterministic_algorithms": True,
+                "cudnn_benchmark": False,
+                "tf32": False,
             },
             "duration_seconds": 60.0,
             "samples": samples,
@@ -207,4 +219,3 @@ def test_artifact_manifest_is_relative_deterministic_and_content_bound(tmp_path:
     assert [item["path"] for item in left["files"]] == ["a.json", "b.json"]
     second.write_text(json.dumps({"a": 9}), encoding="utf-8")
     assert file_manifest(tmp_path, [first, second]) != left
-

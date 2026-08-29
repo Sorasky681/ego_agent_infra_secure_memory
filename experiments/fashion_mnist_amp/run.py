@@ -108,6 +108,9 @@ def _run_torch_workload(
     visible_ids = [item.strip() for item in visible.split(",") if item.strip()]
     if len(visible_ids) != 1 or visible_ids[0] == "-1":
         raise ContractError("CUDA_VISIBLE_DEVICES must expose exactly one GPU")
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = str(
+        config["determinism"]["cublas_workspace_config"]
+    )
 
     try:
         import torch
@@ -340,6 +343,12 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         "agentteams_receipt_sha256": arguments.agentteams_receipt_sha256,
         "matrix_plan_sha256": arguments.matrix_plan_sha256,
         "device": device,
+        "determinism": {
+            "cublas_workspace_config": os.environ["CUBLAS_WORKSPACE_CONFIG"],
+            "deterministic_algorithms": True,
+            "cudnn_benchmark": False,
+            "tf32": False,
+        },
         "duration_seconds": duration_seconds,
         **metrics,
     }
@@ -395,4 +404,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

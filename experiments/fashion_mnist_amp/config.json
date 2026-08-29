@@ -32,6 +32,11 @@
     "max_gpu_hours": 0.25,
     "max_download_bytes": 104857600
   },
+  "determinism": {
+    "cublas_workspace_config": ":4096:8",
+    "deterministic_algorithms": true,
+    "cudnn_benchmark": false,
+    "tf32": false
+  },
   "seed": 42
 }
-

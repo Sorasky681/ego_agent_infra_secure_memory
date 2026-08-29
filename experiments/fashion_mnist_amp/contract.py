@@ -77,10 +77,12 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     model = config.get("model")
     comparison = config.get("comparison")
     budget = config.get("budget")
+    determinism = config.get("determinism")
     _require(isinstance(dataset, dict), "dataset config is required")
     _require(isinstance(model, dict), "model config is required")
     _require(isinstance(comparison, dict), "comparison config is required")
     _require(isinstance(budget, dict), "budget config is required")
+    _require(isinstance(determinism, dict), "determinism config is required")
 
     _require(dataset.get("name") == "FashionMNIST", "only FashionMNIST is allowlisted")
     _require(dataset.get("synthetic") is False, "live workload must declare synthetic=false")
@@ -163,6 +165,16 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         and not isinstance(download_bytes, bool)
         and 1 <= download_bytes <= 100 * 1024 * 1024,
         "budget.max_download_bytes must be in (0, 100 MiB]",
+    )
+    _require(
+        determinism
+        == {
+            "cublas_workspace_config": ":4096:8",
+            "deterministic_algorithms": True,
+            "cudnn_benchmark": False,
+            "tf32": False,
+        },
+        "determinism settings must match the v1 contract",
     )
     seed = config.get("seed")
     _require(
@@ -254,6 +266,18 @@ def evaluate_raw_result(
     _require(device.get("cuda_available") is True, "CUDA was not available")
     _require(device.get("visible_device_count") == 1, "exactly one CUDA device must be visible")
     _require(isinstance(device.get("name"), str) and bool(device["name"]), "GPU name is missing")
+    determinism = raw.get("determinism")
+    _require(isinstance(determinism, dict), "runtime determinism evidence is missing")
+    _require(
+        determinism
+        == {
+            "cublas_workspace_config": ":4096:8",
+            "deterministic_algorithms": True,
+            "cudnn_benchmark": False,
+            "tf32": False,
+        },
+        "runtime determinism settings do not match the frozen contract",
+    )
 
     duration = raw.get("duration_seconds")
     _require(
@@ -360,4 +384,3 @@ def file_manifest(root: Path, files: Iterable[Path]) -> Dict[str, Any]:
             }
         )
     return {"schema": "egoagentos.real-gpu-artifacts/v1", "files": entries}
-
