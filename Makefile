@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api test-rxp check-api test-benchmark benchmark benchmark-release test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api test-rxp test-postgres check-api test-benchmark benchmark benchmark-release test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -23,6 +23,10 @@ test-api:
 test-rxp:
 	$(UV) run --python 3.9 --extra dev pytest tests/protocols
 	$(UV) run --python 3.9 --extra dev python -m protocols.rxp schema --check
+
+test-postgres:
+	test -n "$(EGO_TEST_POSTGRES_URL)"
+	EGO_TEST_POSTGRES_URL="$(EGO_TEST_POSTGRES_URL)" $(UV) run --python 3.9 --extra dev pytest tests/postgres
 
 check-api:
 	$(UV) run --python 3.9 --extra dev ruff check apps/api protocols/rxp tests/api tests/protocols

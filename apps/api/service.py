@@ -41,7 +41,7 @@ from .policy import (
 )
 from .provenance import canonical_sha256, run_manifest_digest, text_sha256
 from .state_machine import next_forward_stage, progress_for, validate_transition
-from .store import SQLiteStore
+from .store_contract import ResearchStore
 
 
 DEMO_TASK_ID = "ego-lite-001"
@@ -85,7 +85,7 @@ STAGE_AGENT = {
 
 class ResearchOpsService:
     def __init__(
-        self, store: SQLiteStore, approval_hmac_secret: Optional[str] = None
+        self, store: ResearchStore, approval_hmac_secret: Optional[str] = None
     ) -> None:
         self.store = store
         self.approval_hmac_secret = (
@@ -905,9 +905,9 @@ class ResearchOpsService:
             "mode": "deterministic-local",
             "database": {
                 "status": "ready" if database_ready else "unavailable",
-                "engine": "sqlite",
-                "path": self.store.db_path,
-                "audit_events": "append_only_hash_chain",
+                "engine": self.store.engine,
+                "location": self.store.location,
+                "audit_events": self.store.audit_guarantee,
             },
             "external_integrations": self.integrations(),
         }

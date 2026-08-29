@@ -33,6 +33,7 @@ VITE_STATIC_DEMO=true VITE_BASE_PATH=/ego_agent_infra/ npm --prefix apps/web run
 
 ```bash
 cp .env.example .env
+# 将 `openssl rand -hex 32` 的输出填入 .env 的 EGO_POSTGRES_PASSWORD
 docker compose up --build
 ```
 
@@ -42,7 +43,7 @@ docker compose up --build
 - OpenAPI：<http://localhost:8000/docs>
 - Health：<http://localhost:8000/api/v1/health>
 
-默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、SQLite 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 AgentTeams、Nacos 或 Higress 在线状态。
+默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、PostgreSQL 16 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 PolarDB/PITR、AgentTeams、Nacos 或 Higress 在线状态。直接启动 API 且不设置 `EGO_DATABASE_URL` 时仍使用 SQLite 开发模式。
 
 若不使用 Docker：
 
@@ -80,7 +81,7 @@ flowchart TB
   H["Researcher / Human Approver"] --> UI["Research Cockpit"]
   UI --> CP["Deterministic Control Plane\nstate · policy · approval · evidence · audit"]
   CP --> A["Local deterministic role handlers\n7 Agent identity contracts"]
-  CP --> DB["SQLite local source of truth\nPostgreSQL / PolarDB adapter-ready"]
+  CP --> DB["SQLite developer backend\nPostgreSQL 16 verified backend"]
   CP --> X["Explicitly synthetic EgoLite execution"]
   S["6 versioned Skill contracts"] -. workflow contract .-> A
   T["4 MCP servers / 7 typed tools"] -. execution profile .-> CP
@@ -100,7 +101,7 @@ INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
 
 任务 stage 与 run status 分离；所有迁移只能经过 control plane。非法跳转、证据不足、过期/错 scope/重放 token 都会产生结构化错误并保留审计事实。
 
-设计详解：[architecture](docs/architecture.md) · [state machine](docs/state-machine.md) · [security](docs/security.md) · [observability](docs/observability.md) · [evaluation](docs/evaluation.md)
+设计详解：[architecture](docs/architecture.md) · [PostgreSQL / recovery](docs/postgres-recovery-runbook.md) · [state machine](docs/state-machine.md) · [security](docs/security.md) · [observability](docs/observability.md) · [evaluation](docs/evaluation.md)
 
 ## 7 个 Agent Identity
 
@@ -202,6 +203,7 @@ make test
 
 ```bash
 make test-api     # backend domain/API
+make test-postgres EGO_TEST_POSTGRES_URL=postgresql://...  # real PostgreSQL contract
 make check-api    # Ruff + MyPy
 make test-mcp     # MCP policy/security/tool contracts (Python 3.12 + uv)
 make test-web     # Vitest + production build
@@ -219,7 +221,7 @@ make package
 ## 目录
 
 ```text
-apps/api/                 FastAPI + SQLite deterministic control plane
+apps/api/                 FastAPI + SQLite/PostgreSQL deterministic control plane
 apps/web/                 React Research Cockpit
 protocols/rxp/            RXP/1 models, schemas, grants, ledger, CLI
 agents/                   7 Agent identity contracts

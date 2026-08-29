@@ -16,6 +16,8 @@ evidence URI is produced by the current repository and replayed successfully.
 | RXP detects omitted matrix decisions and rejects scope/expiry/replay/tampering | verified in the reference implementation | Cartesian-plan validation, `missing_decisions`, concurrent SQLite replay test, causal/root mutation tests |
 | RXP is persisted by the FastAPI control plane or a distributed transparency service | not claimed | API adapter, durable document/artifact store, serializable distributed replay registry, externally checkpointed root required |
 | Web cockpit reflects backend gate truth | verified locally | 9 component/normalization/static-replay tests + production build + completed/approval/mobile screenshots |
+| PostgreSQL store preserves the control-plane contract | verified on local PostgreSQL 16 | real-container suite: full API, atomic rollback, optimistic concurrency, linear audit chain, immutable trigger, commit-only notify, migration replay |
+| PolarDB-PG deployment or PITR completed | not claimed | cloud endpoint handshake, backup policy, restore job, chain replay, measured RPO/RTO required |
 | API invokes MCP over HTTP in the default Web replay | not claimed | network client call trace + correlated tool artifact required |
 | CPU hashing recovery branch works | synthetic control-flow fixture only | before/after fixture + trace sequence; requires physical-run evidence for a performance claim |
 | 8×RTX 4090 experiment ran | not claimed | real scheduler logs + manifests + metric artifacts |

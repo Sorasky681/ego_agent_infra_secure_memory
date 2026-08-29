@@ -9,6 +9,7 @@ description = "Evidence-gated multi-agent ResearchOps control plane"
 requires-python = ">=3.9"
 dependencies = [
   "fastapi>=0.111,<0.116",
+  "psycopg[binary]>=3.2,<3.4",
   "pydantic>=2.7,<3",
   "uvicorn[standard]>=0.30,<0.35",
 ]
@@ -30,7 +31,7 @@ include = ["apps.api*", "benchmarks*", "protocols*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"apps.api" = ["fixtures/*.yaml"]
+"apps.api" = ["fixtures/*.yaml", "migrations/postgres/*.sql"]
 "benchmarks" = ["corpus/v1/*.json"]
 "protocols.rxp" = ["schemas/*.json"]
 

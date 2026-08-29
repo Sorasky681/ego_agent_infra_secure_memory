@@ -10,7 +10,7 @@ flowchart TB
   UI --> API["Deterministic control plane\nstate · policy · approval · evidence gate"]
   API --> R["Local role handlers\n7 identity contracts"]
   R --> FX["Explicitly synthetic EgoLite fixtures"]
-  API --> DB["Authoritative store\nSQLite local · PostgreSQL/PolarDB profile"]
+  API --> DB["Authoritative store\nSQLite dev · verified PostgreSQL 16 profile"]
   API --> AU["Evidence + immutable audit chain"]
   RXP["RXP/1 executable protocol\nIntent · Grant · Receipt · Evidence · Decision"]
   RXP --> RL["Canonical MatrixLedger\nMerkle evidence · missing-cell proof"]
@@ -71,11 +71,14 @@ Manager–Worker collaboration. That deployment is intentionally reported as
 
 ## Deployment profiles
 
-- `local`: API + Web + SQLite + filesystem artifacts + deterministic simulator. This is
-  the default and the only profile required for a judge replay.
-- `platform` (target contract): PostgreSQL-compatible DB, object storage, OTel collector,
+- `local-sqlite`: API + Web + SQLite + filesystem artifacts + deterministic simulator.
+  This remains the zero-service developer profile.
+- `local-postgres`: Docker Compose + PostgreSQL 16 + API + Web. Real database integration
+  tests verify transactions, concurrency, append-only triggers, LISTEN/NOTIFY, and migration
+  replay. This does not imply a cloud database was exercised.
+- `platform` (target contract): PolarDB-PG-compatible DB, object storage, OTel collector,
   AgentTeams, Higress, and Nacos. The current health API reports external endpoints as
-  `not_configured` or `configured_unverified`; it does not probe or certify them.
+  `not_configured` or `configured_unverified`; it does not certify PolarDB or PITR.
 - `lab`: platform profile plus a real scheduler/GPU adapter and a trusted dataset root.
 
 The local profile is a functioning control-plane path, not a static UI. Agent reasoning,

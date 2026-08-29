@@ -139,8 +139,12 @@ def _mutation_state(db_path: str) -> _MutationState:
 
 
 class SQLiteStore:
+    engine = "sqlite"
+    audit_guarantee = "trigger_immutable_application_hash_chain"
+
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        self.location = db_path
         self._lock = threading.RLock()
         self._mutation_state = _mutation_state(db_path)
         self._transaction_local = threading.local()

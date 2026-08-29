@@ -20,9 +20,9 @@ from .models import (
     RXPVerifyRequest,
 )
 from .provenance import canonical_sha256
-from .service import ResearchOpsService
-from .store import SQLiteStore
 from .rxp_runtime import demo_ledger, schema_catalog, verify_uploaded_ledger
+from .service import ResearchOpsService
+from .store_factory import create_store
 from protocols.rxp import RXPError
 
 
@@ -106,14 +106,12 @@ def _redact_approval_replay(response: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_app(
-    db_path: Optional[str] = None, approval_hmac_secret: Optional[str] = None
+    db_path: Optional[str] = None,
+    approval_hmac_secret: Optional[str] = None,
+    *,
+    database_url: Optional[str] = None,
 ) -> FastAPI:
-    resolved_db_path: str = (
-        db_path
-        if db_path is not None
-        else os.getenv("EGO_DB_PATH", "/tmp/egoagentos-researchops.sqlite3")
-    )
-    store = SQLiteStore(resolved_db_path)
+    store = create_store(database_url=database_url, sqlite_path=db_path)
     service = ResearchOpsService(store, approval_hmac_secret=approval_hmac_secret)
 
     application = FastAPI(

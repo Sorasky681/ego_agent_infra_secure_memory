@@ -1,6 +1,7 @@
 # EgoAgentOS ResearchOps API
 
-FastAPI + SQLite control plane for the EgoLite competition demo. The workflow is a strict
+FastAPI control plane with interchangeable SQLite and PostgreSQL persistence for the EgoLite
+competition demo. The workflow is a strict
 state machine; policy, approvals, provenance hashes, evaluation, evidence verification, and
 audit persistence are deterministic Python rather than LLM assertions.
 
@@ -39,6 +40,13 @@ at `VERIFY`; the response states the exact missing artifact without claiming suc
 Every mutating route accepts `Idempotency-Key`. Reusing a key with a different body returns a
 structured conflict. API errors use `{"error":{"code", "message", "details", "request_id"}}`.
 
+Set `EGO_DATABASE_URL=postgresql://...` to use the real psycopg backend. It implements the
+same store contract with atomic transactions, optimistic task versions, row locks, an
+append-only database trigger, stream-scoped advisory locks, and commit-ordered
+`ego_stage_events` notifications. See the
+[database runbook](../../docs/postgres-recovery-runbook.md) for migration, RLS, test, backup,
+and recovery procedures.
+
 ## External adapter truth states
 
 Setting `EGO_HICLAW_URL`, `EGO_NACOS_URL`, or `EGO_HIGRESS_URL` changes the corresponding state
@@ -55,4 +63,5 @@ docker run --rm -p 8000:8000 -v egoagentos-data:/data egoagentos-api
 ```
 
 The image runs as the non-root `egoagentos` user and includes a `/api/v1/health` health check.
-
+The repository Compose file starts PostgreSQL 16 by default and requires
+`EGO_POSTGRES_PASSWORD` from the ignored `.env`; it does not contain a production secret.
