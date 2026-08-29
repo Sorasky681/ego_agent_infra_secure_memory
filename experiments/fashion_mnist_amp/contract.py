@@ -13,7 +13,7 @@ import math
 import re
 import statistics
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, cast
 
 
 CONFIG_SCHEMA = "egoagentos.real-gpu-config/v1"
@@ -55,6 +55,7 @@ def _is_sha256(value: Any) -> bool:
 
 def _finite_numbers(values: Any, *, name: str, positive: bool = False) -> List[float]:
     _require(isinstance(values, list) and bool(values), f"{name} must be a non-empty list")
+    values = cast(List[Any], values)
     result: List[float] = []
     for value in values:
         _require(
@@ -84,6 +85,11 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     _require(isinstance(comparison, dict), "comparison config is required")
     _require(isinstance(budget, dict), "budget config is required")
     _require(isinstance(determinism, dict), "determinism config is required")
+    dataset = cast(Dict[str, Any], dataset)
+    model = cast(Dict[str, Any], model)
+    comparison = cast(Dict[str, Any], comparison)
+    budget = cast(Dict[str, Any], budget)
+    determinism = cast(Dict[str, Any], determinism)
 
     _require(dataset.get("name") == "FashionMNIST", "only FashionMNIST is allowlisted")
     _require(dataset.get("synthetic") is False, "live workload must declare synthetic=false")
@@ -95,9 +101,11 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     )
     _require(isinstance(dataset.get("download"), bool), "dataset.download must be boolean")
     for field, upper in (("train_samples", 60_000), ("eval_samples", 10_000)):
-        value = dataset.get(field)
+        dataset_count_value = dataset.get(field)
         _require(
-            isinstance(value, int) and not isinstance(value, bool) and 32 <= value <= upper,
+            isinstance(dataset_count_value, int)
+            and not isinstance(dataset_count_value, bool)
+            and 32 <= dataset_count_value <= upper,
             f"dataset.{field} is outside the bounded range",
         )
 
@@ -108,9 +116,11 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "model.epochs must be in [1, 5]",
     )
     for field in ("train_batch_size", "eval_batch_size"):
-        value = model.get(field)
+        batch_value = model.get(field)
         _require(
-            isinstance(value, int) and not isinstance(value, bool) and 32 <= value <= 2048,
+            isinstance(batch_value, int)
+            and not isinstance(batch_value, bool)
+            and 32 <= batch_value <= 2048,
             f"model.{field} is outside the bounded range",
         )
     learning_rate = model.get("learning_rate")
@@ -126,24 +136,26 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         comparison.get("candidate") == "cuda-amp-fp16",
         "candidate must be cuda-amp-fp16",
     )
-    for field, low, high in (
+    for field, low_int, high_int in (
         ("warmup_repetitions", 1, 20),
         ("latency_repetitions", 5, 100),
     ):
-        value = comparison.get(field)
+        repetition_value = comparison.get(field)
         _require(
-            isinstance(value, int) and not isinstance(value, bool) and low <= value <= high,
+            isinstance(repetition_value, int)
+            and not isinstance(repetition_value, bool)
+            and low_int <= repetition_value <= high_int,
             f"comparison.{field} is outside the bounded range",
         )
-    for field, low, high in (
+    for field, low_float, high_float in (
         ("max_accuracy_degradation", 0.0, 0.05),
         ("min_latency_speedup", -0.25, 0.75),
     ):
-        value = comparison.get(field)
+        threshold_value = comparison.get(field)
         _require(
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and low <= float(value) <= high,
+            isinstance(threshold_value, (int, float))
+            and not isinstance(threshold_value, bool)
+            and low_float <= float(threshold_value) <= high_float,
             f"comparison.{field} is outside the bounded range",
         )
 
@@ -192,17 +204,19 @@ def load_and_validate_config(path: str | Path) -> Dict[str, Any]:
     except (OSError, json.JSONDecodeError) as error:
         raise ContractError(f"cannot read config: {type(error).__name__}") from error
     _require(isinstance(payload, dict), "config root must be an object")
-    return validate_config(payload)
+    return validate_config(cast(Dict[str, Any], payload))
 
 
 def _classification_rows(raw: Mapping[str, Any], expected_count: int) -> List[Mapping[str, Any]]:
     rows = raw.get("samples")
     _require(isinstance(rows, list), "samples must be a list")
+    rows = cast(List[Any], rows)
     _require(len(rows) == expected_count, "sample count does not match frozen config")
     seen: set[int] = set()
     normalized: List[Mapping[str, Any]] = []
     for row in rows:
         _require(isinstance(row, dict), "each sample must be an object")
+        row = cast(Dict[str, Any], row)
         _require(set(row) == {"sample_id", "target", "baseline_pred", "candidate_pred"},
                  "sample row fields must match the v1 raw contract")
         sample_id = row.get("sample_id")
@@ -214,6 +228,7 @@ def _classification_rows(raw: Mapping[str, Any], expected_count: int) -> List[Ma
             "sample_id must be a non-negative integer",
         )
         _require(sample_id not in seen, "duplicate sample_id")
+        sample_id = cast(int, sample_id)
         seen.add(sample_id)
         for value in (target, baseline, candidate):
             _require(
@@ -245,7 +260,7 @@ def evaluate_raw_result(
 
     config = raw.get("config")
     _require(isinstance(config, dict), "frozen config is missing")
-    config = validate_config(config)
+    config = validate_config(cast(Dict[str, Any], config))
     config_sha256 = raw.get("config_sha256")
     _require(_is_sha256(config_sha256), "config_sha256 is invalid")
     _require(config_sha256 == canonical_sha256(config), "config digest mismatch")
@@ -270,6 +285,7 @@ def evaluate_raw_result(
         and all(character in "0123456789abcdef" for character in git_commit),
         "git_commit is invalid",
     )
+    git_commit = cast(str, git_commit)
     _require(
         raw["git_commit_sha256"] == hashlib.sha256(git_commit.encode("ascii")).hexdigest(),
         "git commit digest mismatch",
@@ -284,12 +300,14 @@ def evaluate_raw_result(
 
     device = raw.get("device")
     _require(isinstance(device, dict), "device evidence is missing")
+    device = cast(Dict[str, Any], device)
     _require(device.get("type") == "cuda", "device type is not cuda")
     _require(device.get("cuda_available") is True, "CUDA was not available")
     _require(device.get("visible_device_count") == 1, "exactly one CUDA device must be visible")
     _require(isinstance(device.get("name"), str) and bool(device["name"]), "GPU name is missing")
     determinism = raw.get("determinism")
     _require(isinstance(determinism, dict), "runtime determinism evidence is missing")
+    determinism = cast(Dict[str, Any], determinism)
     _require(
         determinism
         == {
@@ -309,15 +327,17 @@ def evaluate_raw_result(
         and float(duration) > 0.0,
         "duration_seconds must be a positive finite number",
     )
+    duration_value = float(cast(Any, duration))
     max_duration = float(config["budget"]["max_duration_seconds"])
     max_gpu_hours = float(config["budget"]["max_gpu_hours"])
-    _require(float(duration) <= max_duration, "wall-time budget exceeded")
-    observed_gpu_hours = float(duration) / 3600.0
+    _require(duration_value <= max_duration, "wall-time budget exceeded")
+    observed_gpu_hours = duration_value / 3600.0
     _require(observed_gpu_hours <= max_gpu_hours, "GPU-hour budget exceeded")
 
     rows = _classification_rows(raw, int(config["dataset"]["eval_samples"]))
     latency = raw.get("latency_ms")
     _require(isinstance(latency, dict), "latency_ms is missing")
+    latency = cast(Dict[str, Any], latency)
     baseline_latency = _finite_numbers(latency.get("baseline"), name="baseline latency", positive=True)
     candidate_latency = _finite_numbers(
         latency.get("candidate"), name="candidate latency", positive=True
@@ -328,10 +348,13 @@ def evaluate_raw_result(
 
     max_memory = raw.get("max_memory_bytes")
     _require(isinstance(max_memory, dict), "max_memory_bytes is missing")
+    max_memory = cast(Dict[str, Any], max_memory)
     for key in ("baseline", "candidate"):
-        value = max_memory.get(key)
+        memory_value = max_memory.get(key)
         _require(
-            isinstance(value, int) and not isinstance(value, bool) and value > 0,
+            isinstance(memory_value, int)
+            and not isinstance(memory_value, bool)
+            and memory_value > 0,
             f"max_memory_bytes.{key} must be positive",
         )
 

@@ -67,6 +67,7 @@ check-agentteams:
 test-experiments:
 	$(UV) run --python 3.9 --extra dev pytest tests/experiments
 	$(UV) run --python 3.9 --extra dev ruff check experiments tests/experiments
+	$(UV) run --python 3.9 --extra dev mypy experiments/fashion_mnist_amp/contract.py
 
 test-web:
 	npm --prefix apps/web test
