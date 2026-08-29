@@ -18,8 +18,9 @@ flowchart TB
   SK["6 versioned Skill contracts"] -. "workflow contract" .-> R
   MCP["4 independently runnable MCP servers"] -. "execution-profile bridge" .-> API
   MCP -. "may carry RXP documents" .-> RXP
-  AT["AgentTeams / Matrix deployment contract"] -. "Manager–Worker envelopes" .-> R
-  AT -. "may carry RXP digests" .-> RXP
+  AT["Official AgentTeams Controller + Matrix\noptional live deployment"] -. "Project API + TeamHarness" .-> AB["Durable AgentTeams bridge\ncorrelation · replan · recovery"]
+  AB -. "validated artifact receipts" .-> API
+  AB -. "RXP digests and cell refs" .-> RXP
   HG["Higress route policy"] -. "not deployed" .-> MCP
   NC["Nacos publish policy"] -. "not deployed" .-> SK
 ```
@@ -65,9 +66,22 @@ cannot mutate these invariants.
 6. The gate authorizes the fixed local `KEEP`/`INCONCLUSIVE` decision path. Archived
    evidence then becomes validated memory and a draft Skill candidate.
 
-The AgentTeams target profile uses the same identity and envelope contracts for live
-Manager–Worker collaboration. That deployment is intentionally reported as
-`not_configured` in this repository until a Matrix handshake is captured.
+The optional AgentTeams profile is executable, rather than a role-label simulation. The
+bridge creates a real Controller Project, applies the DAG through the Project Workflow
+API, dispatches a versioned envelope to the Team Leader over Matrix, and observes
+TeamHarness-backed task states and declared artifacts. A Worker result is accepted only
+after task/project/trace/context correlation and artifact SHA-256 verification.
+
+Conflict, revision, stale context, ACK timeout, or execution timeout trigger bounded
+cancel/replacement/replan behavior. The pre-execution DAG is paused at R2; only a scoped
+EgoAgentOS approval receipt can resume it. If an upstream mutation succeeds but Matrix or
+a later recovery step fails, the bridge persists `COMPENSATION_REQUIRED` and fences the
+Controller Project. SQLite stores bridge checkpoints and a tamper-evident event chain,
+while a fresh Controller workflow read remains authoritative for collaboration state.
+
+This profile still reports `not configured` until real health, Team/Worker readiness,
+Project API, and Matrix responses are captured. Unit fixtures validate the contract and
+state machine; they are not live-execution evidence.
 
 ## Deployment profiles
 
@@ -76,6 +90,9 @@ Manager–Worker collaboration. That deployment is intentionally reported as
 - `local-postgres`: Docker Compose + PostgreSQL 16 + API + Web. Real database integration
   tests verify transactions, concurrency, append-only triggers, LISTEN/NOTIFY, and migration
   replay. This does not imply a cloud database was exercised.
+- `agentteams` (opt-in executable profile): external official AgentTeams deployment plus
+  `apps/agentteams_bridge`; the bridge itself performs fail-closed Controller/Team/Matrix
+  probes before dispatch.
 - `platform` (target contract): PolarDB-PG-compatible DB, object storage, OTel collector,
   AgentTeams, Higress, and Nacos. The current health API reports external endpoints as
   `not_configured` or `configured_unverified`; it does not certify PolarDB or PITR.

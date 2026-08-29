@@ -11,6 +11,7 @@ dependencies = [
   "fastapi>=0.111,<0.116",
   "psycopg[binary]>=3.2,<3.4",
   "pydantic>=2.7,<3",
+  "pyyaml>=6.0,<7",
   "uvicorn[standard]>=0.30,<0.35",
 ]
 
@@ -27,19 +28,30 @@ rxp-bench = "benchmarks.runner:main"
 rxp = "protocols.rxp.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["apps.api*", "benchmarks*", "protocols*"]
+include = [
+  "apps.api*",
+  "apps.agentteams_bridge*",
+  "benchmarks*",
+  "integrations.agentteams*",
+  "protocols*",
+  "skill_runtime*",
+]
 namespaces = true
 
 [tool.setuptools.package-data]
 "apps.api" = ["fixtures/*.yaml", "migrations/postgres/*.sql"]
 "benchmarks" = ["corpus/v1/*.json"]
+"integrations.agentteams" = ["*.json", "*.yaml", "*.tmpl", "scripts/*.py"]
 "protocols.rxp" = ["schemas/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests/api", "tests/benchmarks", "tests/protocols"]
+testpaths = ["tests/api", "tests/agentteams", "tests/benchmarks", "tests/protocols", "tests/skills"]
 pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py39"
 line-length = 100
+
+[tool.mypy]
+explicit_package_bases = true

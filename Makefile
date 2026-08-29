@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api test-rxp test-postgres check-api test-benchmark benchmark benchmark-release test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-postgres check-api test-benchmark benchmark benchmark-release test-agentteams check-agentteams test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -15,7 +15,7 @@ install-mcp:
 install-web:
 	npm --prefix apps/web ci
 
-test: test-api test-rxp check-api test-benchmark test-mcp test-web verify
+test: test-api test-rxp test-skills check-api test-benchmark test-agentteams check-agentteams test-mcp test-web verify
 
 test-api:
 	$(UV) run --python 3.9 --extra dev pytest tests/api
@@ -24,13 +24,16 @@ test-rxp:
 	$(UV) run --python 3.9 --extra dev pytest tests/protocols
 	$(UV) run --python 3.9 --extra dev python -m protocols.rxp schema --check
 
+test-skills:
+	$(UV) run --python 3.9 --extra dev pytest tests/skills
+
 test-postgres:
 	test -n "$(EGO_TEST_POSTGRES_URL)"
 	EGO_TEST_POSTGRES_URL="$(EGO_TEST_POSTGRES_URL)" $(UV) run --python 3.9 --extra dev pytest tests/postgres
 
 check-api:
-	$(UV) run --python 3.9 --extra dev ruff check apps/api protocols/rxp tests/api tests/protocols
-	$(UV) run --python 3.9 --extra dev mypy apps/api protocols/rxp
+	$(UV) run --python 3.9 --extra dev ruff check apps/api protocols/rxp skill_runtime tests/api tests/protocols tests/skills
+	$(UV) run --python 3.9 --extra dev mypy apps/api protocols/rxp skill_runtime
 
 test-benchmark:
 	$(UV) run --python 3.9 --extra dev pytest tests/benchmarks
@@ -43,6 +46,14 @@ benchmark:
 
 benchmark-release:
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --profiles agentteams-rxp-target --release-gate agentteams-rxp-target
+
+test-agentteams:
+	$(UV) run --python 3.9 --extra dev pytest tests/agentteams
+
+check-agentteams:
+	$(UV) run --python 3.9 --extra dev ruff check apps/agentteams_bridge integrations/agentteams/benchmark_adapter.py tests/agentteams
+	$(UV) run --python 3.9 --extra dev mypy apps/agentteams_bridge integrations/agentteams/benchmark_adapter.py
+	$(PYTHON) integrations/agentteams/scripts/verify_official_contract.py --offline
 
 test-web:
 	npm --prefix apps/web test

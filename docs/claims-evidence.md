@@ -21,7 +21,9 @@ evidence URI is produced by the current repository and replayed successfully.
 | API invokes MCP over HTTP in the default Web replay | not claimed | network client call trace + correlated tool artifact required |
 | CPU hashing recovery branch works | synthetic control-flow fixture only | before/after fixture + trace sequence; requires physical-run evidence for a performance claim |
 | 8×RTX 4090 experiment ran | not claimed | real scheduler logs + manifests + metric artifacts |
-| AgentTeams Matrix collaboration is live | not configured | room transcript envelope + health probe |
+| AgentTeams bridge contract/state/fault behavior | verified with explicit contract fixtures; not live | `tests/agentteams`: official pins, real-endpoint call shapes, result digests, reassign, R2, compensation, skill-evidence levels, trace truth gates |
+| AgentTeams Matrix collaboration is live | not verified on this host | real Controller version/health, active Team and ready Workers, Project/workflow IDs, Matrix event IDs, official spawn/tool trace, content-addressed artifacts, scoped R2 receipt, final trace hash |
+| canonical 14-scenario AgentTeams benchmark passes | not claimed | one scenario-specific live trace per seed; generic completion is rejected and missing live bindings return `skip` |
 | Higress isolates upstream credentials | not configured | route export + positive/negative leak test |
 | Nacos Skill is published | not configured | registry version response + package digest |
 | official Aliyun SLS Skill queried a trace | not configured | redacted invocation + matching trace ID |

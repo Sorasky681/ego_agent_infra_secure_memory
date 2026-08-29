@@ -54,5 +54,31 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  agentteams-bridge:
+    profiles: ["agentteams"]
+    build:
+      context: .
+      dockerfile: apps/agentteams_bridge/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      EGO_API_URL: http://backend:8000
+      EGO_AGENTTEAMS_BRIDGE_DB: /data/agentteams-bridge.sqlite3
+      AGENTTEAMS_CONTROLLER_URL: ${AGENTTEAMS_CONTROLLER_URL:-http://host.docker.internal:18080}
+      AGENTTEAMS_AUTH_TOKEN: ${AGENTTEAMS_AUTH_TOKEN:-}
+      AGENTTEAMS_MATRIX_URL: ${AGENTTEAMS_MATRIX_URL:-http://host.docker.internal:18080}
+      AGENTTEAMS_MATRIX_ACCESS_TOKEN: ${AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - egoagentos-bridge-data:/data
+    ports:
+      - "127.0.0.1:8010:8010"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   egoagentos-postgres:
+  egoagentos-bridge-data:

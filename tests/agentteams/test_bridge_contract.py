@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from apps.agentteams_bridge.models import (
+    CollaborationEnvelope,
+    EnvelopeKind,
+    StartRunRequest,
+)
+from integrations.agentteams.benchmark_adapter import run_scenario
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_official_contract_pin_and_resource_shape() -> None:
+    lock = json.loads(
+        (ROOT / "integrations/agentteams/official-contract.lock.json").read_text()
+    )
+    assert lock["stable"] == {
+        "tag": "v1.2.2",
+        "commit": "849182af8e017168a5a200a87b1062142caf462d",
+        "note": "Latest stable release shown by the official README during implementation.",
+    }
+    assert lock["main"]["commit"] == "223ddc2b8073e4c8b93bcbb15e1d717f196c04d9"
+    assert lock["main"]["required_for_live_bridge"] is True
+    assert lock["apiVersion"] == "agentteams.io/v1beta1"
+    assert len(lock["artifacts"]) == 7
+
+    resources = (ROOT / "integrations/agentteams/agentteams-resources.yaml.tmpl").read_text()
+    assert resources.count("kind: Worker") == 7
+    assert "kind: Team" in resources
+    assert "kind: Manager" in resources
+    assert "name: ego-research-lead\n      role: team_leader" in resources
+    assert "kind: Team" in resources and resources.index("kind: Team") > resources.rindex("kind: Worker")
+
+
+def test_fixture_files_cannot_be_mistaken_for_live_responses() -> None:
+    for path in sorted((ROOT / "tests/agentteams/fixtures").glob("*.fixture.json")):
+        payload = json.loads(path.read_text())
+        assert "CONTRACT FIXTURE ONLY" in payload["_fixture_notice"]
+
+
+def test_trace_and_result_schemas_encode_the_truth_gates() -> None:
+    trace = json.loads(
+        (ROOT / "integrations/agentteams/trace.schema.json").read_text()
+    )
+    assert trace["properties"]["source"] == {"const": "AgentTeams"}
+    assert trace["properties"]["execution_mode"] == {"const": "real-agentteams"}
+    assert trace["properties"]["synthetic"] == {"const": False}
+    assert trace["properties"]["agents"]["minItems"] == 3
+    assert {"events", "rxp", "principals", "scenario_proof"} <= set(
+        trace["required"]
+    )
+
+    result = json.loads(
+        (ROOT / "integrations/agentteams/result-envelope.schema.json").read_text()
+    )
+    assert {"review_verdict", "independent_review"} <= set(result["required"])
+
+
+def test_collaboration_envelope_binds_body_digest() -> None:
+    envelope = CollaborationEnvelope.build(
+        task_id="task-123",
+        project_id="project-123",
+        trace_id="trace-123456",
+        correlation_id="corr-123456",
+        context_version=2,
+        kind=EnvelopeKind.TASK_REQUEST,
+        sender="egoagentos-bridge",
+        recipient="agentteams-team-leader",
+        body={"command": "delegate", "version": 2},
+    )
+    assert envelope.body_sha256
+    changed = envelope.model_dump(mode="json", by_alias=True)
+    changed["body"] = {"command": "bypass"}
+    with pytest.raises(ValidationError, match="body_sha256"):
+        CollaborationEnvelope.model_validate(changed)
+
+
+def test_dry_run_makes_zero_upstream_calls_and_never_claims_live(bridge, fake_transport) -> None:
+    run = bridge.start_run(
+        StartRunRequest(
+            ego_task_id="task-dry",
+            objective="Generate a dry-run orchestration plan only",
+            mode="dry_run",
+        )
+    )
+    assert run.mode == "dry_run"
+    assert run.checkpoint["truth"] == "DRY_RUN_ONLY"
+    assert run.checkpoint["live"] is False
+    assert fake_transport.calls == []
+
+
+def test_benchmark_without_live_opt_in_is_skip(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("AGENTTEAMS_BENCHMARK_LIVE", raising=False)
+    result = run_scenario({"ego_task_id": "task", "objective": "objective"}, 7, tmp_path)
+    assert result["status"] == "skip"
+    assert result["details"]["execution_mode"] != "real-agentteams"
+    assert not list(tmp_path.iterdir())

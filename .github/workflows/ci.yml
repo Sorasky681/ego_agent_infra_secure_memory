@@ -45,13 +45,27 @@ jobs:
       - name: Check RXP schemas
         run: uv run --python 3.9 --extra dev --locked python -m protocols.rxp schema --check
 
-      - name: Lint API and RXP
+      - name: Test AgentTeams bridge contracts
+        run: uv run --python 3.9 --extra dev --locked pytest tests/agentteams
+
+      - name: Test Skill runtime
+        run: uv run --python 3.9 --extra dev --locked pytest tests/skills
+
+      - name: Lint API, RXP, AgentTeams, and Skills
         run: >-
           uv run --python 3.9 --extra dev --locked
-          ruff check apps/api protocols/rxp tests/api tests/protocols
+          ruff check apps/api protocols/rxp apps/agentteams_bridge
+          integrations/agentteams/benchmark_adapter.py skill_runtime
+          tests/api tests/protocols tests/agentteams tests/skills
 
-      - name: Type-check API and RXP
-        run: uv run --python 3.9 --extra dev --locked mypy apps/api protocols/rxp
+      - name: Type-check API, RXP, AgentTeams, and Skills
+        run: >-
+          uv run --python 3.9 --extra dev --locked mypy
+          apps/api protocols/rxp apps/agentteams_bridge
+          integrations/agentteams/benchmark_adapter.py skill_runtime
+
+      - name: Validate pinned AgentTeams contract lock
+        run: python integrations/agentteams/scripts/verify_official_contract.py --offline
 
   postgres:
     name: PostgreSQL contract (Python 3.9 / PG 16)
