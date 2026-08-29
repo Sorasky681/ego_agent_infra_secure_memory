@@ -80,18 +80,21 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     comparison = config.get("comparison")
     budget = config.get("budget")
     governance = config.get("governance")
+    telemetry = config.get("telemetry")
     determinism = config.get("determinism")
     _require(isinstance(dataset, dict), "dataset config is required")
     _require(isinstance(model, dict), "model config is required")
     _require(isinstance(comparison, dict), "comparison config is required")
     _require(isinstance(budget, dict), "budget config is required")
     _require(isinstance(governance, dict), "governance config is required")
+    _require(isinstance(telemetry, dict), "telemetry config is required")
     _require(isinstance(determinism, dict), "determinism config is required")
     dataset = cast(Dict[str, Any], dataset)
     model = cast(Dict[str, Any], model)
     comparison = cast(Dict[str, Any], comparison)
     budget = cast(Dict[str, Any], budget)
     governance = cast(Dict[str, Any], governance)
+    telemetry = cast(Dict[str, Any], telemetry)
     determinism = cast(Dict[str, Any], determinism)
 
     _require(dataset.get("name") == "FashionMNIST", "only FashionMNIST is allowlisted")
@@ -201,6 +204,14 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "independent_review_required": True,
         },
         "governance settings must require R2 human approval and independent review",
+    )
+    _require(
+        telemetry.get("nvidia_smi_path") == "/usr/bin/nvidia-smi",
+        "telemetry must use the fixed /usr/bin/nvidia-smi executable",
+    )
+    _require(
+        telemetry.get("sampling") == "stage_boundaries",
+        "telemetry sampling must use deterministic stage boundaries",
     )
     seed = config.get("seed")
     _require(

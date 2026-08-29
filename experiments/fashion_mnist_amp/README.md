@@ -18,6 +18,8 @@ The runner is intentionally strict:
 - every prediction and every latency repetition is retained as raw evidence, and the
   trained tensor state is written in a deterministic binary format whose digest is
   recomputable from the artifact bytes;
+- fixed-argv `/usr/bin/nvidia-smi` stage-boundary sampling freezes the physical job's GPU UUID,
+  utilization, memory and power as `gpu-telemetry.jsonl`; a missing sampler is fatal;
 - the CPU-only verifier recomputes the final Decision and rejects duplicates, NaN,
   digest drift, missing receipts, multi-GPU visibility, or budget overrun.
 

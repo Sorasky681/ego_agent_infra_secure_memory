@@ -8,12 +8,15 @@ fallback and refuses to run when more than one CUDA device is visible.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import os
 import random
 import re
 import struct
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -109,9 +112,90 @@ def _trace_event(
     events.append(body)
 
 
+class _GPUTelemetry:
+    """Sample one scheduler-bound GPU with fixed argv and fail closed on any gap."""
+
+    def __init__(self, *, executable: str, device_binding: str, job_id: str):
+        self.executable = executable
+        self.device_binding = device_binding
+        self.job_id = job_id
+        self.records: List[Dict[str, Any]] = []
+
+    def _sample(self) -> None:
+        try:
+            completed = subprocess.run(
+                [
+                    self.executable,
+                    "--query-gpu=uuid,name,utilization.gpu,memory.used,power.draw",
+                    "--format=csv,noheader,nounits",
+                    "--id=%s" % self.device_binding,
+                ],
+                check=True,
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ContractError("fixed nvidia-smi telemetry command failed") from error
+        try:
+            rows = list(csv.reader(io.StringIO(completed.stdout.decode("utf-8", "strict"))))
+            if len(rows) != 1 or len(rows[0]) != 5:
+                raise ValueError("unexpected nvidia-smi row shape")
+            gpu_uuid, gpu_model, utilization, memory_mib, power = (
+                value.strip() for value in rows[0]
+            )
+            record = {
+                "sequence": len(self.records) + 1,
+                "timestamp_ns": time.time_ns(),
+                "job_id": self.job_id,
+                "gpu_uuid": gpu_uuid,
+                "gpu_model": gpu_model,
+                "utilization_pct": float(utilization),
+                "memory_used_bytes": int(float(memory_mib) * 1024 * 1024),
+                "power_w": float(power),
+            }
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ContractError("nvidia-smi telemetry is malformed") from error
+        if not gpu_uuid or not gpu_model:
+            raise ContractError("nvidia-smi telemetry omitted GPU identity")
+        self.records.append(record)
+
+    def start(self) -> None:
+        executable = Path(self.executable)
+        if not executable.is_absolute():
+            raise ContractError("fixed nvidia-smi executable is missing or unsafe")
+        try:
+            resolved = executable.resolve(strict=True)
+        except OSError as error:
+            raise ContractError("fixed nvidia-smi executable is missing or unsafe") from error
+        if not resolved.is_file():
+            raise ContractError("fixed nvidia-smi executable is missing or unsafe")
+        self.executable = str(resolved)
+        self._sample()
+
+    def sample(self) -> None:
+        self._sample()
+
+    def finish(self) -> List[Dict[str, Any]]:
+        # Capture a terminal sample on the main path. Stage-boundary calls above avoid
+        # an unaccounted background process and still retain the job's physical timeline.
+        self._sample()
+        if len(self.records) < 2:
+            raise ContractError("GPU telemetry requires at least two samples")
+        timestamps = [int(record["timestamp_ns"]) for record in self.records]
+        if timestamps != sorted(set(timestamps)):
+            raise ContractError("GPU telemetry timestamps are not strictly increasing")
+        identities = {(record["job_id"], record["gpu_uuid"]) for record in self.records}
+        if len(identities) != 1:
+            raise ContractError("GPU telemetry changed job or device identity")
+        return self.records
+
+
 def _run_torch_workload(
-    config: Dict[str, Any], data_root: Path, started: float
-) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], bytes]:
+    config: Dict[str, Any], data_root: Path, started: float, physical_launch_id: str
+) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], bytes, List[Dict[str, Any]]]:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     visible_ids = [item.strip() for item in visible.split(",") if item.strip()]
     if len(visible_ids) != 1 or visible_ids[0] == "-1":
@@ -119,6 +203,12 @@ def _run_torch_workload(
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = str(
         config["determinism"]["cublas_workspace_config"]
     )
+    telemetry = _GPUTelemetry(
+        executable=str(config["telemetry"]["nvidia_smi_path"]),
+        device_binding=visible_ids[0],
+        job_id=physical_launch_id,
+    )
+    telemetry.start()
 
     try:
         import torch
@@ -213,6 +303,7 @@ def _run_torch_workload(
             loss = loss_function(logits, targets)
             loss.backward()
             optimizer.step()
+        telemetry.sample()
         _trace_event(events, "training.epoch.completed", {"epoch": epoch + 1})
 
     model_blob = bytearray(b"EGOAGENTOS-MODEL-STATE-V1\n")
@@ -255,6 +346,7 @@ def _run_torch_workload(
                 )
             sample_offset += len(target_values)
     _trace_event(events, "predictions.frozen", {"sample_count": len(samples)})
+    telemetry.sample()
 
     first_images, _ = next(iter(eval_loader))
     benchmark_images = first_images.to(device, non_blocking=False)
@@ -283,6 +375,7 @@ def _run_torch_workload(
 
     baseline_latency, baseline_memory = measure(amp=False)
     candidate_latency, candidate_memory = measure(amp=True)
+    telemetry.sample()
     _trace_event(events, "latency.raw.frozen", {"repetitions": repetitions})
 
     device_evidence = {
@@ -302,7 +395,9 @@ def _run_torch_workload(
         "latency_ms": {"baseline": baseline_latency, "candidate": candidate_latency},
         "max_memory_bytes": {"baseline": baseline_memory, "candidate": candidate_memory},
     }
-    return device_evidence, metrics, events, model_state_bytes
+    telemetry_records = telemetry.finish()
+    _trace_event(events, "gpu.telemetry.frozen", {"samples": len(telemetry_records)})
+    return device_evidence, metrics, events, model_state_bytes, telemetry_records
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -352,7 +447,9 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     output_root = _prepare_output(Path(arguments.output_dir))
     data_root = Path(arguments.data_root).resolve()
     started = time.monotonic()
-    device, metrics, events, model_state_bytes = _run_torch_workload(config, data_root, started)
+    device, metrics, events, model_state_bytes, telemetry_records = _run_torch_workload(
+        config, data_root, started, physical_launch_id
+    )
     duration_seconds = time.monotonic() - started
     dataset_manifest = _tree_manifest(data_root)
     if int(dataset_manifest["total_bytes"]) > int(config["budget"]["max_download_bytes"]):
@@ -402,6 +499,7 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     decision_path = output_root / "decision.json"
     trace_path = output_root / "trace.jsonl"
     model_path = output_root / "model-state.bin"
+    telemetry_path = output_root / "gpu-telemetry.jsonl"
     raw_path.write_bytes(canonical_bytes(raw) + b"\n")
     decision_path.write_bytes(canonical_bytes(decision) + b"\n")
     trace_path.write_text(
@@ -411,8 +509,23 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     model_path.write_bytes(model_state_bytes)
     if _sha256_file(model_path) != raw["trained_model_sha256"]:
         raise ContractError("persisted model-state digest mismatch")
+    telemetry_path.write_text(
+        "".join(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            for record in telemetry_records
+        ),
+        encoding="utf-8",
+    )
     manifest = file_manifest(
-        output_root, [dataset_manifest_path, raw_path, decision_path, trace_path, model_path]
+        output_root,
+        [
+            dataset_manifest_path,
+            raw_path,
+            decision_path,
+            trace_path,
+            model_path,
+            telemetry_path,
+        ],
     )
     manifest["artifact_root"] = canonical_sha256(manifest["files"])
     manifest_path = output_root / "artifact-manifest.json"

@@ -38,6 +38,10 @@
     "max_physical_launches": 1,
     "independent_review_required": true
   },
+  "telemetry": {
+    "nvidia_smi_path": "/usr/bin/nvidia-smi",
+    "sampling": "stage_boundaries"
+  },
   "determinism": {
     "cublas_workspace_config": ":4096:8",
     "deterministic_algorithms": true,

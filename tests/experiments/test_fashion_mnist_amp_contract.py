@@ -18,6 +18,7 @@ from experiments.fashion_mnist_amp.contract import (
     validate_config,
 )
 from experiments.fashion_mnist_amp.verify import main as verify_main
+from experiments.fashion_mnist_amp.run import _GPUTelemetry
 
 
 def config_fixture() -> dict[str, object]:
@@ -60,6 +61,10 @@ def config_fixture() -> dict[str, object]:
             "human_approval_required": True,
             "max_physical_launches": 1,
             "independent_review_required": True,
+        },
+        "telemetry": {
+            "nvidia_smi_path": "/usr/bin/nvidia-smi",
+            "sampling": "stage_boundaries",
         },
         "determinism": {
             "cublas_workspace_config": ":4096:8",
@@ -250,3 +255,36 @@ def test_offline_verifier_cli_writes_once_and_rejects_tamper(
     raw_path.write_text(json.dumps(tampered), encoding="utf-8")
     assert verify_main([str(raw_path)]) == 2
     assert "raw evidence digest mismatch" in capsys.readouterr().err
+
+
+def test_gpu_telemetry_uses_fixed_argv_and_one_job_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "nvidia-smi"
+    executable.write_bytes(b"fixture executable")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Result:
+        stdout = b"GPU-test-uuid, NVIDIA Test GPU, 42, 128, 75.5\n"
+
+    def fake_run(command: list[str], **kwargs: object) -> Result:
+        calls.append((command, kwargs))
+        return Result()
+
+    monkeypatch.setattr("experiments.fashion_mnist_amp.run.subprocess.run", fake_run)
+    telemetry = _GPUTelemetry(
+        executable=str(executable),
+        device_binding="GPU-test-uuid",
+        job_id="gpu-launch-0001",
+    )
+    telemetry.start()
+    telemetry.sample()
+    records = telemetry.finish()
+
+    assert len(records) == 3
+    assert [record["sequence"] for record in records] == [1, 2, 3]
+    assert {record["gpu_uuid"] for record in records} == {"GPU-test-uuid"}
+    assert {record["job_id"] for record in records} == {"gpu-launch-0001"}
+    assert records[0]["memory_used_bytes"] == 128 * 1024 * 1024
+    assert all(call[0][-1] == "--id=GPU-test-uuid" for call in calls)
+    assert all(call[1]["shell"] is False for call in calls)
