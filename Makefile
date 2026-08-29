@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-postgres check-api test-benchmark benchmark benchmark-release test-agentteams check-agentteams test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-proof test-postgres check-api test-benchmark benchmark benchmark-release demo-proof test-agentteams check-agentteams test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -15,7 +15,7 @@ install-mcp:
 install-web:
 	npm --prefix apps/web ci
 
-test: test-api test-rxp test-skills check-api test-benchmark test-agentteams check-agentteams test-mcp test-web verify
+test: test-api test-rxp test-skills test-proof check-api test-benchmark test-agentteams check-agentteams test-mcp test-web verify
 
 test-api:
 	$(UV) run --python 3.9 --extra dev pytest tests/api
@@ -26,6 +26,10 @@ test-rxp:
 
 test-skills:
 	$(UV) run --python 3.9 --extra dev pytest tests/skills
+
+test-proof:
+	$(UV) run --python 3.9 --extra dev pytest tests/proofs
+	$(UV) run --python 3.9 --extra dev ruff check scripts/build_semifinal_proof.py scripts/verify_submission.py tests/proofs
 
 test-postgres:
 	test -n "$(EGO_TEST_POSTGRES_URL)"
@@ -47,6 +51,10 @@ benchmark:
 benchmark-release:
 	@test -n "$(EVIDENCE_DIR)" || (echo "EVIDENCE_DIR must name a new or empty persistent directory" >&2; exit 2)
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --profiles agentteams-rxp-target --release-gate agentteams-rxp-target --evidence-dir "$(EVIDENCE_DIR)"
+
+demo-proof:
+	$(UV) run --python 3.9 --extra dev python scripts/build_semifinal_proof.py
+	$(UV) run --python 3.9 --extra dev python scripts/build_semifinal_proof.py --check
 
 test-agentteams:
 	$(UV) run --python 3.9 --extra dev pytest tests/agentteams

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -14,6 +15,8 @@ from build_submission import included_files
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SEMIFINAL_PROOF_PATH = ROOT / "submission" / "evidence" / "semifinal-local-proof.json"
+SEMIFINAL_PROOF_CHECKSUM = SEMIFINAL_PROOF_PATH.with_suffix(".sha256")
 REQUIRED_AGENT_FIELDS = (
     "id:",
     "name:",
@@ -44,10 +47,16 @@ REQUIRED_DELIVERABLES = (
     "LICENSE",
     "Makefile",
     "README.md",
+    "benchmarks/artifacts/2026-08-29-local-cpu.json",
+    "benchmarks/artifacts/2026-08-29-local-cpu.md",
+    "benchmarks/artifacts/2026-08-29-local-cpu.sha256",
+    "benchmarks/trace-contract.md",
     "contracts/approval-token-v1.json",
     "docker-compose.yml",
+    "docs/evidence/postgres-local-proof-2026-08-29.md",
     "docs/protocols/RXP.md",
     "docs/openapi.json",
+    "integrations/agentteams/official-contract.lock.json",
     "mcp_servers/pyproject.toml",
     "mcp_servers/uv.lock",
     "pyproject.toml",
@@ -60,8 +69,13 @@ REQUIRED_DELIVERABLES = (
     "protocols/rxp/schemas/rxp-matrix-plan-v1.schema.json",
     "protocols/rxp/schemas/rxp-receipt-v1.schema.json",
     "requirements-api.lock",
+    "scripts/build_semifinal_proof.py",
+    "skill_runtime/handlers.py",
+    "skill_runtime/registry.py",
     "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pdf",
     "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pptx",
+    "submission/evidence/semifinal-local-proof.json",
+    "submission/evidence/semifinal-local-proof.sha256",
     "submission/project-summary-zh.txt",
     "submission/verification-report.md",
     "uv.lock",
@@ -156,6 +170,77 @@ def validate_required_deliverables(failures: List[str]) -> None:
         check(pdf.read_bytes()[:5] == b"%PDF-", "proposal PDF signature is invalid", failures)
 
 
+def validate_semifinal_proof(failures: List[str]) -> None:
+    if not SEMIFINAL_PROOF_PATH.is_file() or not SEMIFINAL_PROOF_CHECKSUM.is_file():
+        return
+    payload = SEMIFINAL_PROOF_PATH.read_bytes()
+    expected_checksum = "%s  %s\n" % (
+        hashlib.sha256(payload).hexdigest(),
+        SEMIFINAL_PROOF_PATH.name,
+    )
+    check(
+        SEMIFINAL_PROOF_CHECKSUM.read_text(encoding="ascii") == expected_checksum,
+        "semifinal local proof SHA-256 is stale or invalid",
+        failures,
+    )
+    try:
+        proof = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        failures.append("semifinal local proof is not valid UTF-8 JSON")
+        return
+    check(
+        proof.get("schema_version") == "egoagentos.semifinal-local-proof/v1",
+        "semifinal local proof schema_version mismatch",
+        failures,
+    )
+    local = proof.get("local_executable_proofs", {})
+    check(local.get("rxp", {}).get("status") == "PASS", "RXP proof is not PASS", failures)
+    skill = local.get("skill_runtime", {})
+    check(skill.get("status") == "PASS", "Skill runtime proof is not PASS", failures)
+    check(
+        skill.get("research_plan_invocation", {}).get("trace", {}).get("status") == "PASS",
+        "ResearchPlan invocation proof is not PASS",
+        failures,
+    )
+    boundaries = proof.get("external_runtime_boundaries", {})
+    agentteams = boundaries.get("live_agentteams", {})
+    check(agentteams.get("status") == "SKIP", "live AgentTeams must remain SKIP", failures)
+    check(
+        agentteams.get("verification") == "UNVERIFIED",
+        "live AgentTeams must remain UNVERIFIED",
+        failures,
+    )
+    for name in ("polardb_deployment", "pitr_restore", "application_docker_image"):
+        boundary = boundaries.get(name, {})
+        check(boundary.get("status") == "NOT_RUN", "%s must remain NOT_RUN" % name, failures)
+        check(
+            boundary.get("verification") == "UNVERIFIED",
+            "%s must remain UNVERIFIED" % name,
+            failures,
+        )
+    indexes = proof.get("committed_evidence_indexes", {})
+    evidence_files = list(indexes.get("benchmark", {}).get("files", []))
+    for name in ("agentteams_contract_lock", "postgresql_local_contract"):
+        item = indexes.get(name, {}).get("file")
+        if isinstance(item, dict):
+            evidence_files.append(item)
+    for item in evidence_files:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            failures.append("semifinal proof contains an invalid evidence file record")
+            continue
+        path = (ROOT / item["path"]).resolve()
+        if ROOT.resolve() not in path.parents or not path.is_file() or path.is_symlink():
+            failures.append("semifinal proof evidence path is unsafe or missing: %s" % item["path"])
+            continue
+        content = path.read_bytes()
+        check(len(content) == item.get("bytes"), "%s byte count mismatch" % item["path"], failures)
+        check(
+            hashlib.sha256(content).hexdigest() == item.get("sha256"),
+            "%s SHA-256 mismatch" % item["path"],
+            failures,
+        )
+
+
 def scan_secrets(failures: List[str]) -> None:
     """Scan exactly the files that can enter the deterministic submission ZIP."""
 
@@ -184,11 +269,12 @@ def main() -> int:
     validate_truth_labels(failures)
     validate_shared_contracts(failures)
     validate_required_deliverables(failures)
+    validate_semifinal_proof(failures)
     scan_secrets(failures)
 
     result: Dict[str, object] = {
         "status": "PASS" if not failures else "FAIL",
-        "checks": 8,
+        "checks": 9,
         "failures": failures,
     }
     if args.json:

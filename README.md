@@ -210,6 +210,7 @@ make test-mcp     # MCP policy/security/tool contracts (Python 3.12 + uv)
 make test-web     # Vitest + production build
 make test-agentteams  # bridge contract/state/fault tests; fixtures are not live
 make check-agentteams # Ruff + MyPy for bridge and adapter
+make demo-proof   # rebuild deterministic semifinal proof + checksum, then verify freshness
 make verify       # agents/skills/fixtures/claims/secret scan
 ```
 
@@ -219,7 +220,7 @@ make verify       # agents/skills/fixtures/claims/secret scan
 make package
 ```
 
-输出为 `submission/dist/EgoAgentOS_GOAI_Initial.zip`。构建器只打包显式 allowlist，不包含 `.env`、SQLite、缓存、`node_modules` 或本机凭据。
+输出为 `submission/dist/EgoAgentOS_GOAI_Semifinal.zip`。构建器只打包显式 allowlist，不包含 `.env`、SQLite、缓存、`node_modules` 或本机凭据。
 
 ## 目录
 
