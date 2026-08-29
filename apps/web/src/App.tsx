@@ -55,6 +55,7 @@ function approvalTokenForGeneration(
 
 const navItems = [
   { id: "cockpit", label: "Task cockpit", icon: Gauge },
+  { id: "acceptance", label: "Semifinal acceptance", icon: ShieldCheck },
   { id: "experiments", label: "Experiments", icon: FlaskConical },
   { id: "protocol", label: "RXP protocol", icon: KeyRound },
   { id: "evidence", label: "Evidence", icon: FileCheck2 },
@@ -302,6 +303,7 @@ function App() {
           <div className="primary-column">
             <TaskCommand task={activeTask} runtimeMode={dashboard.runtimeMode} />
             <RXPProtocolView data={rxp} runtimeMode={dashboard.runtimeMode} />
+            <AcceptanceReadiness runtimeMode={dashboard.runtimeMode} />
             <StageSpine current={activeTask.stage} reducedMotion={Boolean(prefersReducedMotion)} />
 
             <div className="operating-grid">
@@ -655,6 +657,127 @@ function RXPProtocolView({
       ) : (
         <InlineEmpty icon={KeyRound} text="The RXP ledger endpoint did not return a verifiable protocol document." />
       )}
+    </section>
+  );
+}
+
+const liveAcceptanceSteps = [
+  ["01", "Plan", "Matrix frozen"],
+  ["02", "Review", "Independent"],
+  ["03", "Approve", "R2 exact scope"],
+  ["04", "Execute", "1 GPU · ≤900s"],
+  ["05", "Evaluate", "Raw metrics"],
+  ["06", "Verify", "Evidence Gate"],
+  ["07", "Decision", "KEEP / REJECT"],
+];
+
+const databaseRoles = [
+  ["runtime", "state + append", "No DELETE"],
+  ["auditor", "SELECT only", "No mutation"],
+  ["evidence writer", "INSERT evidence", "No memory write"],
+  ["memory curator", "INSERT candidate", "No validated write"],
+];
+
+function AcceptanceReadiness({
+  runtimeMode,
+}: {
+  runtimeMode: DashboardData["runtimeMode"];
+}) {
+  const [layer, setLayer] = useState<"gpu" | "database">("gpu");
+  return (
+    <section className="acceptance-readiness" id="acceptance" aria-labelledby="acceptance-readiness-title">
+      <SectionHeading
+        id="acceptance-readiness-title"
+        index="JUDGE"
+        title="Semifinal acceptance path"
+        note="Code-ready · external execution still evidence-gated"
+      />
+      <div className="acceptance-truthline">
+        <span><ShieldCheck size={13} /> CONTRACT PATH IMPLEMENTED</span>
+        <span className="origin-warning">EXTERNAL ORIGIN · UNVERIFIED</span>
+        <span>{runtimeMode === "static_replay" ? "THIS PAGE · STATIC REPLAY" : "THIS TASK · SYNTHETIC API"}</span>
+      </div>
+      <div className="acceptance-tabs" role="tablist" aria-label="Acceptance evidence layer">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={layer === "gpu"}
+          className={layer === "gpu" ? "active" : ""}
+          onClick={() => setLayer("gpu")}
+        >
+          AgentTeams + GPU
+          <small>controlled experiment chain</small>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={layer === "database"}
+          className={layer === "database" ? "active" : ""}
+          onClick={() => setLayer("database")}
+        >
+          PostgreSQL + PolarDB
+          <small>durability and access boundary</small>
+        </button>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {layer === "gpu" ? (
+          <motion.div
+            className="live-acceptance-flow"
+            key="gpu-acceptance"
+            role="tabpanel"
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+          >
+            {liveAcceptanceSteps.map(([index, title, detail], stepIndex) => (
+              <div className="live-acceptance-step" key={title}>
+                <span>{index}</span>
+                <strong>{title}</strong>
+                <small>{detail}</small>
+                {stepIndex < liveAcceptanceSteps.length - 1 && <ArrowRight size={13} aria-hidden="true" />}
+              </div>
+            ))}
+          </motion.div>
+        ) : (
+          <motion.div
+            className="database-boundaries"
+            key="database-acceptance"
+            role="tabpanel"
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+          >
+            <div className="database-principle">
+              <Database size={20} strokeWidth={1.4} />
+              <div>
+                <span>SOURCE OF TRUTH</span>
+                <strong>PostgreSQL MVCC + JSONB</strong>
+                <small>RLS · immutable ledgers · commit-only NOTIFY · checksum replay</small>
+              </div>
+            </div>
+            <div className="role-matrix" aria-label="Database role write boundaries">
+              {databaseRoles.map(([role, grant, denied]) => (
+                <div className="role-matrix-row" key={role}>
+                  <strong>{role}</strong>
+                  <span>{grant}</span>
+                  <small>{denied}</small>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <div className="acceptance-boundary">
+        <span>LOCAL POSTGRESQL 16 · CONTRACT VERIFIED</span>
+        <span>POLARDB / PITR / OFFICIAL AGENTTEAMS / GPU · NOT RUN</span>
+        <a
+          href="https://github.com/mythrise/ego_agent_infra/blob/main/docs/judge-feedback-implementation.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Evidence map <ArrowRight size={12} />
+        </a>
+      </div>
     </section>
   );
 }

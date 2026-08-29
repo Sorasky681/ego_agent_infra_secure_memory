@@ -750,6 +750,242 @@ p {
   color: var(--warning);
 }
 
+.acceptance-readiness {
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.acceptance-truthline {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+}
+
+.acceptance-truthline span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green);
+}
+
+.acceptance-truthline .origin-warning {
+  color: var(--warning);
+}
+
+.acceptance-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line);
+}
+
+.acceptance-tabs button {
+  min-height: 58px;
+  padding: 12px 16px 11px 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.acceptance-tabs button + button {
+  padding-left: 16px;
+  border-right: 0;
+}
+
+.acceptance-tabs button.active {
+  background: linear-gradient(90deg, var(--green-faint), transparent 68%);
+  color: var(--text);
+}
+
+.acceptance-tabs small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.live-acceptance-flow {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(90px, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.live-acceptance-step {
+  position: relative;
+  min-width: 0;
+  padding: 20px 14px 18px 0;
+}
+
+.live-acceptance-step + .live-acceptance-step {
+  padding-left: 14px;
+}
+
+.live-acceptance-step > span,
+.database-principle span {
+  display: block;
+  margin-bottom: 9px;
+  color: rgba(137, 242, 174, 0.52);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.live-acceptance-step strong {
+  display: block;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 560;
+}
+
+.live-acceptance-step small {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-acceptance-step svg {
+  position: absolute;
+  top: 34px;
+  right: 2px;
+  color: rgba(137, 242, 174, 0.34);
+}
+
+.database-boundaries {
+  min-height: 113px;
+  display: grid;
+  grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr);
+  border-bottom: 1px solid var(--line);
+}
+
+.database-principle {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  padding: 18px 18px 18px 0;
+  border-right: 1px solid var(--line);
+}
+
+.database-principle > svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+.database-principle span {
+  margin-bottom: 7px;
+}
+
+.database-principle strong {
+  display: block;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.database-principle small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.role-matrix {
+  padding-left: 18px;
+}
+
+.role-matrix-row {
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(110px, 1fr) minmax(90px, 0.8fr);
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.role-matrix-row:last-child {
+  border-bottom: 0;
+}
+
+.role-matrix-row:hover {
+  background: linear-gradient(90deg, var(--green-faint), transparent);
+}
+
+.role-matrix-row strong,
+.role-matrix-row span,
+.role-matrix-row small {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.role-matrix-row strong {
+  color: var(--text-soft);
+}
+
+.role-matrix-row span {
+  color: var(--green);
+}
+
+.role-matrix-row small {
+  color: var(--muted);
+}
+
+.acceptance-boundary {
+  min-height: 37px;
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  padding-top: 13px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.05em;
+}
+
+.acceptance-boundary span:last-of-type {
+  color: var(--warning);
+}
+
+.acceptance-boundary a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-soft);
+}
+
+.acceptance-boundary a:hover {
+  color: var(--green);
+}
+
 .stage-section {
   border-bottom: 1px solid var(--line);
 }
@@ -2176,6 +2412,10 @@ p {
     padding-left: 0;
     border-top: 1px solid var(--line);
   }
+
+  .live-acceptance-flow {
+    overflow-x: auto;
+  }
 }
 
 @media (max-width: 720px) {
@@ -2383,6 +2623,30 @@ p {
     padding-left: 0;
   }
 
+  .database-boundaries {
+    grid-template-columns: 1fr;
+  }
+
+  .database-principle {
+    padding: 17px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .role-matrix {
+    padding-left: 0;
+  }
+
+  .acceptance-boundary {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+
+  .acceptance-boundary a {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .resource-plots {
     grid-template-columns: 1fr;
     gap: 0;
@@ -2530,6 +2794,23 @@ p {
   }
 
   .section-heading p {
+    display: none;
+  }
+
+  .acceptance-tabs button {
+    min-height: 63px;
+    padding-right: 10px;
+  }
+
+  .acceptance-tabs button + button {
+    padding-left: 10px;
+  }
+
+  .role-matrix-row {
+    grid-template-columns: minmax(92px, 1fr) minmax(85px, 1fr);
+  }
+
+  .role-matrix-row small {
     display: none;
   }
 
