@@ -32,6 +32,7 @@ include = [
   "apps.api*",
   "apps.agentteams_bridge*",
   "benchmarks*",
+  "experiments*",
   "integrations*",
   "protocols*",
   "skill_runtime*",
@@ -48,7 +49,7 @@ namespaces = true
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests/api", "tests/agentteams", "tests/benchmarks", "tests/protocols", "tests/skills"]
+testpaths = ["tests/api", "tests/agentteams", "tests/benchmarks", "tests/experiments", "tests/protocols", "tests/skills"]
 pythonpath = ["."]
 
 [tool.ruff]

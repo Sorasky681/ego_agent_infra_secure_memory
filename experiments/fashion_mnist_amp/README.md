@@ -1,0 +1,41 @@
+# Real GPU acceptance workload
+
+This directory is a narrow, cost-capped live workload for the semifinal acceptance
+run. It trains one small CNN on the public Fashion-MNIST training split, then compares
+FP32 and CUDA AMP inference on the same frozen test samples. The research result may be
+`KEEP` or `REJECT`; successful execution is never confused with candidate success.
+
+The runner is intentionally strict:
+
+- `synthetic=false`, the allowlisted upstream and MIT license are frozen in config;
+- `CUDA_VISIBLE_DEVICES` and Torch must expose exactly one GPU;
+- there is no CPU fallback and no arbitrary command field;
+- wall time is capped at 900 seconds / 0.25 GPU-hours;
+- dataset bytes, code identity, approval receipt, AgentTeams receipt and Matrix plan are
+  content-bound;
+- every prediction and every latency repetition is retained as raw evidence;
+- the CPU-only verifier recomputes the final Decision and rejects duplicates, NaN,
+  digest drift, missing receipts, multi-GPU visibility, or budget overrun.
+
+The committed config defaults to `download=false`, so running it cannot unexpectedly
+download data. To authorize the one-time public dataset download, copy the config,
+change `dataset.download` to `true`, bind that exact file in the human approval, and
+also pass `--allow-download`.
+
+Example live invocation (only after AgentTeams and human approval receipts exist):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m experiments.fashion_mnist_amp.run \
+  --config /absolute/approved-config.json \
+  --data-root /absolute/fashion-mnist \
+  --output-dir /new/empty/evidence/runtime \
+  --git-commit "$(git rev-parse HEAD)" \
+  --approval-receipt-sha256 "$APPROVAL_RECEIPT_SHA256" \
+  --agentteams-receipt-sha256 "$AGENTTEAMS_RECEIPT_SHA256" \
+  --matrix-plan-sha256 "$MATRIX_PLAN_SHA256"
+```
+
+No live artifact is committed yet. The presence of this adapter proves only that the
+repository is ready to execute the bounded workload once an official worker and CUDA
+runner are available.
+

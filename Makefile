@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-proof test-postgres check-api test-benchmark benchmark benchmark-release demo-proof test-agentteams check-agentteams test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-proof test-postgres check-api test-benchmark benchmark benchmark-release demo-proof test-agentteams check-agentteams test-experiments test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -15,7 +15,7 @@ install-mcp:
 install-web:
 	npm --prefix apps/web ci
 
-test: test-api test-rxp test-skills test-proof check-api test-benchmark test-agentteams check-agentteams test-mcp test-web verify
+test: test-api test-rxp test-skills test-proof check-api test-benchmark test-agentteams check-agentteams test-experiments test-mcp test-web verify
 
 test-api:
 	$(UV) run --python 3.9 --extra dev pytest tests/api
@@ -63,6 +63,10 @@ check-agentteams:
 	$(UV) run --python 3.9 --extra dev ruff check apps/agentteams_bridge integrations/agentteams/benchmark_adapter.py tests/agentteams
 	$(UV) run --python 3.9 --extra dev mypy apps/agentteams_bridge integrations/agentteams/benchmark_adapter.py
 	$(PYTHON) integrations/agentteams/scripts/verify_official_contract.py --offline
+
+test-experiments:
+	$(UV) run --python 3.9 --extra dev pytest tests/experiments
+	$(UV) run --python 3.9 --extra dev ruff check experiments tests/experiments
 
 test-web:
 	npm --prefix apps/web test
