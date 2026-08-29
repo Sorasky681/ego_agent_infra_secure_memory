@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+ego-polardb-preflight = "apps.api.polardb_preflight:main"
 rxp-bench = "benchmarks.runner:main"
 rxp = "protocols.rxp.cli:main"
 ego-real-gpu-verify = "experiments.fashion_mnist_amp.verify:main"
