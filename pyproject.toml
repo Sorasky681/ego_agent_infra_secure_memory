@@ -26,6 +26,7 @@ dev = [
 [project.scripts]
 rxp-bench = "benchmarks.runner:main"
 rxp = "protocols.rxp.cli:main"
+ego-real-gpu-verify = "experiments.fashion_mnist_amp.verify:main"
 
 [tool.setuptools.packages.find]
 include = [

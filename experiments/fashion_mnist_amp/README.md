@@ -43,3 +43,11 @@ CUDA_VISIBLE_DEVICES=0 python -m experiments.fashion_mnist_amp.run \
 No live artifact is committed yet. The presence of this adapter proves only that the
 repository is ready to execute the bounded workload once an official worker and CUDA
 runner are available.
+
+Anyone can recompute the Evidence Gate and Decision without CUDA or Torch:
+
+```bash
+python -m experiments.fashion_mnist_amp.verify \
+  /absolute/evidence/runtime/raw-metrics.json \
+  --expected-config-sha256 "$CONFIG_SHA256"
+```

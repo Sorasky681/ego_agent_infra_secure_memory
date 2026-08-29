@@ -17,6 +17,7 @@ from experiments.fashion_mnist_amp.contract import (
     file_manifest,
     validate_config,
 )
+from experiments.fashion_mnist_amp.verify import main as verify_main
 
 
 def config_fixture() -> dict[str, object]:
@@ -224,3 +225,22 @@ def test_artifact_manifest_is_relative_deterministic_and_content_bound(tmp_path:
     assert [item["path"] for item in left["files"]] == ["a.json", "b.json"]
     second.write_text(json.dumps({"a": 9}), encoding="utf-8")
     assert file_manifest(tmp_path, [first, second]) != left
+
+
+def test_offline_verifier_cli_writes_once_and_rejects_tamper(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw_path = tmp_path / "raw.json"
+    output_path = tmp_path / "decision.json"
+    raw_path.write_text(json.dumps(raw_fixture()), encoding="utf-8")
+
+    assert verify_main([str(raw_path), "--output", str(output_path)]) == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["result"]["decision"] == "KEEP"
+    assert verify_main([str(raw_path), "--output", str(output_path)]) == 2
+    assert "output_exists" in capsys.readouterr().err
+
+    tampered = raw_fixture()
+    tampered["duration_seconds"] = 61.0
+    raw_path.write_text(json.dumps(tampered), encoding="utf-8")
+    assert verify_main([str(raw_path)]) == 2
+    assert "raw evidence digest mismatch" in capsys.readouterr().err
