@@ -13,6 +13,7 @@ import {
   FlaskConical,
   Gauge,
   GitBranch,
+  KeyRound,
   Menu,
   Network,
   Pause,
@@ -28,6 +29,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { researchApi } from "./api";
 import { syntheticDashboard } from "./demoData";
+import { syntheticRXP } from "./rxpDemoData";
 import { STAGES } from "./types";
 import type {
   ApprovalGate,
@@ -36,6 +38,7 @@ import type {
   Experiment,
   IntegrationTruth,
   ResearchTask,
+  RXPProtocolData,
   ResourceSnapshot,
   TraceEvent,
 } from "./types";
@@ -53,6 +56,7 @@ function approvalTokenForGeneration(
 const navItems = [
   { id: "cockpit", label: "Task cockpit", icon: Gauge },
   { id: "experiments", label: "Experiments", icon: FlaskConical },
+  { id: "protocol", label: "RXP protocol", icon: KeyRound },
   { id: "evidence", label: "Evidence", icon: FileCheck2 },
   { id: "trace", label: "Audit trace", icon: Workflow },
   { id: "integrations", label: "Integrations", icon: Network },
@@ -108,6 +112,7 @@ function formatMetric(value: number | undefined, suffix = ""): string {
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [rxp, setRxp] = useState<RXPProtocolData | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,6 +145,7 @@ function App() {
     else setLoading(true);
     try {
       const next = await researchApi.dashboard();
+      const nextRXP = await researchApi.rxpDemo().catch(() => null);
       const taskId = selectedTaskId || next.activeTaskId || next.tasks[0]?.id;
       let hydrated = next;
       if (taskId) {
@@ -150,6 +156,7 @@ function App() {
         }
       }
       setDashboard(hydrated);
+      setRxp(nextRXP);
       if (hydrated.runtimeMode === "static_replay") setAutoRefresh(false);
       setSelectedTaskId((current) => current || hydrated.activeTaskId || hydrated.tasks[0]?.id || "");
       setError(null);
@@ -221,6 +228,7 @@ function App() {
         onRetry={() => void load()}
         onFixture={() => {
           setDashboard(syntheticDashboard);
+          setRxp(structuredClone(syntheticRXP));
           setSelectedTaskId(syntheticDashboard.activeTaskId);
           setError(null);
           setAutoRefresh(false);
@@ -255,6 +263,7 @@ function App() {
         <div className="workspace-grid">
           <div className="primary-column">
             <TaskCommand task={activeTask} runtimeMode={dashboard.runtimeMode} />
+            <RXPProtocolView data={rxp} runtimeMode={dashboard.runtimeMode} />
             <StageSpine current={activeTask.stage} reducedMotion={Boolean(prefersReducedMotion)} />
 
             <div className="operating-grid">
@@ -511,6 +520,103 @@ function TaskCommand({ task, runtimeMode }: { task: ResearchTask; runtimeMode: D
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+function compactDigest(value: string | undefined): string {
+  if (!value || value === "not-emitted") return "not emitted";
+  return value.length > 28 ? `${value.slice(0, 16)}…${value.slice(-8)}` : value;
+}
+
+function RXPProtocolView({
+  data,
+  runtimeMode,
+}: {
+  data: RXPProtocolData | null;
+  runtimeMode: DashboardData["runtimeMode"];
+}) {
+  const [selectedCellId, setSelectedCellId] = useState("");
+  const selectedCell = data?.cells.find((cell) => cell.cellId === selectedCellId) ?? data?.cells[0];
+  const lifecycle = ["Intent", "Grant", "Receipt", "Evidence", "Decision"];
+
+  return (
+    <section className="rxp-section" id="protocol" aria-labelledby="rxp-title">
+      <SectionHeading
+        id="rxp-title"
+        index="RXP/1"
+        title="Research eXecution Protocol"
+        note="Experiment authority becomes a replayable causal chain"
+      />
+      {data ? (
+        <>
+          <div className="rxp-truthline">
+            <span className={`rxp-verdict ${data.structuralVerification.toLowerCase()}`}>
+              <ShieldCheck size={14} /> STRUCTURE {data.structuralVerification}
+            </span>
+            <span>{runtimeMode === "static_replay" ? "STATIC FIXTURE · VERIFIER NOT EXECUTED HERE" : "LOCAL API · VERIFIER EXECUTED"}</span>
+            <span>GPU RUN · {data.physicalGpuRun ? "VERIFIED" : "NONE"}</span>
+            <span>PRODUCTION SIGNATURE TRUST · {data.productionSignatureTrust ? "VERIFIED" : "NONE"}</span>
+          </div>
+
+          <div className="rxp-rootline">
+            <div>
+              <span>FROZEN MATRIX</span>
+              <strong>{data.matrixId}</strong>
+            </div>
+            <div>
+              <span>APPEND-ONLY ROOT · {data.entryCount} ENTRIES</span>
+              <code title={data.root}>{compactDigest(data.root)}</code>
+            </div>
+            <div className={`rxp-completeness ${data.completeness.toLowerCase()}`}>
+              <span>MATRIX COVERAGE</span>
+              <strong>{data.decidedCellCount}/{data.expectedCellCount} {data.completeness}</strong>
+            </div>
+          </div>
+
+          <div className="rxp-chain" aria-label="RXP causal lifecycle">
+            {lifecycle.map((stage, index) => (
+              <div className="rxp-chain-step" key={stage}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{stage}</strong>
+                <small>{index === 1 ? "one-use scope" : index === 3 ? "Merkle gate" : "digest bound"}</small>
+                {index < lifecycle.length - 1 && <ArrowRight size={14} aria-hidden="true" />}
+              </div>
+            ))}
+          </div>
+
+          <div className="rxp-inspection">
+            <div className="rxp-cell-index" role="list" aria-label="Committed matrix cells">
+              {data.cells.map((cell) => (
+                <button
+                  type="button"
+                  className={cell.cellId === selectedCell?.cellId ? "active" : ""}
+                  key={cell.cellId}
+                  onClick={() => setSelectedCellId(cell.cellId)}
+                >
+                  <span>{cell.cellId}</span>
+                  <strong>{cell.state}</strong>
+                  <small>{cell.evidenceCount}/7 evidence · {cell.determinismLevel.replace("_BYTE_REPLAY_VERIFIED", "")}</small>
+                </button>
+              ))}
+            </div>
+            {selectedCell && (
+              <dl className="rxp-cell-detail">
+                <div><dt>Intent</dt><dd><code title={selectedCell.intentDigest}>{compactDigest(selectedCell.intentDigest)}</code></dd></div>
+                <div><dt>Grant</dt><dd><code title={selectedCell.grantDigest}>{compactDigest(selectedCell.grantDigest)}</code></dd></div>
+                <div><dt>Receipt</dt><dd><code title={selectedCell.receiptDigest}>{compactDigest(selectedCell.receiptDigest)}</code></dd></div>
+                <div><dt>Decision</dt><dd><code title={selectedCell.decisionDigest}>{compactDigest(selectedCell.decisionDigest)}</code></dd></div>
+              </dl>
+            )}
+          </div>
+
+          <p className="rxp-notice">
+            <CircleAlert size={13} /> {data.verificationNotice}
+          </p>
+        </>
+      ) : (
+        <InlineEmpty icon={KeyRound} text="The RXP ledger endpoint did not return a verifiable protocol document." />
+      )}
     </section>
   );
 }
@@ -1075,4 +1181,4 @@ function EmptyScreen({ onReset }: { onReset: () => void }) {
 }
 
 export default App;
-export { approvalTokenForGeneration, EvidenceLedger, StageSpine };
+export { approvalTokenForGeneration, EvidenceLedger, RXPProtocolView, StageSpine };

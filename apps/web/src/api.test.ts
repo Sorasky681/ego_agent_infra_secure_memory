@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createResearchApi, normalizeDashboard } from "./api";
+import { createResearchApi, normalizeDashboard, normalizeRXP } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -79,5 +79,43 @@ describe("backend contract normalization", () => {
 
     await api.dashboard();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    const rxp = await api.rxpDemo();
+    expect(rxp.root).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(rxp.productionSignatureTrust).toBe(false);
+  });
+
+  it("normalizes the RXP causal ledger without inventing production trust", () => {
+    const rxp = normalizeRXP({
+      protocol: "RXP/1.0",
+      execution_class: "synthetic deterministic fixture",
+      physical_gpu_run: false,
+      production_signature_trust: false,
+      fixture_signature_verified: true,
+      structural_verification: "PASS",
+      canonical_sha256: "sha256:fixture",
+      ledger: {
+        matrix_id: "matrix:test",
+        completeness: "COMPLETE",
+        expected_cell_count: 1,
+        decided_cell_count: 1,
+        missing_decisions: [],
+        entry_count: 12,
+        root: "sha256:root",
+        cells: [
+          {
+            cell_id: "cell-a",
+            state: "DECIDED",
+            determinism_level: "D2_SEEDED_ENV_BOUND",
+            intent_digest: "sha256:intent",
+            evidence_digests: ["sha256:evidence"],
+          },
+        ],
+      },
+    });
+
+    expect(rxp.completeness).toBe("COMPLETE");
+    expect(rxp.cells[0]).toMatchObject({ cellId: "cell-a", evidenceCount: 1 });
+    expect(rxp.productionSignatureTrust).toBe(false);
+    expect(rxp.physicalGpuRun).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { syntheticTask } from "./demoData";
+import { syntheticRXP } from "./rxpDemoData";
 import { createStaticReplayApi } from "./staticReplay";
 import { STAGES } from "./types";
 import type {
@@ -11,6 +12,7 @@ import type {
   IntegrationTruth,
   ResearchStage,
   ResearchTask,
+  RXPProtocolData,
   ResourceSnapshot,
   TraceEvent,
 } from "./types";
@@ -337,6 +339,48 @@ function normalizeIntegration(value: unknown, index: number): IntegrationTruth {
   };
 }
 
+export function normalizeRXP(value: unknown): RXPProtocolData {
+  const row = record(value);
+  const ledger = record(row.ledger ?? row);
+  return {
+    protocol: text(row.protocol, "RXP/1.0"),
+    executionClass: text(row.execution_class, "unknown"),
+    physicalGpuRun: row.physical_gpu_run === true,
+    productionSignatureTrust: row.production_signature_trust === true,
+    fixtureSignatureVerified: row.fixture_signature_verified === true,
+    structuralVerification: (["PASS", "FAIL", "NOT_RUN"] as const).includes(
+      text(row.structural_verification, "NOT_RUN") as RXPProtocolData["structuralVerification"],
+    )
+      ? (text(row.structural_verification, "NOT_RUN") as RXPProtocolData["structuralVerification"])
+      : "NOT_RUN",
+    verificationNotice: text(
+      row.fixture_key_notice,
+      "No production issuer trust claim was supplied.",
+    ),
+    matrixId: text(ledger.matrix_id, "matrix:not-emitted"),
+    completeness: text(ledger.completeness) === "COMPLETE" ? "COMPLETE" : "INCOMPLETE",
+    expectedCellCount: number(ledger.expected_cell_count) ?? 0,
+    decidedCellCount: number(ledger.decided_cell_count) ?? 0,
+    missingDecisions: array(ledger.missing_decisions).map((item) => text(item, "unknown-cell")),
+    entryCount: number(ledger.entry_count) ?? 0,
+    root: text(ledger.root, "not-emitted"),
+    canonicalSha256: text(row.canonical_sha256, "not-emitted"),
+    cells: array(ledger.cells).map((item, index) => {
+      const cell = record(item);
+      return {
+        cellId: text(cell.cell_id, `cell-${index}`),
+        state: text(cell.state, "UNKNOWN"),
+        determinismLevel: text(cell.determinism_level, "D0_UNVERIFIED"),
+        intentDigest: text(cell.intent_digest, "not-emitted"),
+        grantDigest: text(cell.grant_digest) || undefined,
+        receiptDigest: text(cell.receipt_digest) || undefined,
+        decisionDigest: text(cell.decision_digest) || undefined,
+        evidenceCount: array(cell.evidence_digests).length,
+      };
+    }),
+  };
+}
+
 export function normalizeDashboard(value: unknown, integrationsValue?: unknown): DashboardData {
   const row = record(value);
   const taskValues = array(row.tasks);
@@ -409,6 +453,10 @@ const backendApi = {
       body: JSON.stringify(payload),
     });
   },
+
+  async rxpDemo(): Promise<RXPProtocolData> {
+    return normalizeRXP(await request<unknown>("/rxp/demo"));
+  },
 };
 
 export function createResearchApi(forceStaticReplay = FORCE_STATIC_REPLAY) {
@@ -453,6 +501,10 @@ export function createResearchApi(forceStaticReplay = FORCE_STATIC_REPLAY) {
       return mode === "static_replay"
         ? staticReplay.decide(approvalId, payload)
         : backendApi.decide(approvalId, payload);
+    },
+
+    async rxpDemo(): Promise<RXPProtocolData> {
+      return mode === "static_replay" ? structuredClone(syntheticRXP) : backendApi.rxpDemo();
     },
   };
 }
