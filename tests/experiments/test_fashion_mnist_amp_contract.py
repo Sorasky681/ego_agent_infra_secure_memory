@@ -55,6 +55,12 @@ def config_fixture() -> dict[str, object]:
             "max_gpu_hours": 0.25,
             "max_download_bytes": 1024,
         },
+        "governance": {
+            "risk_level": "R2",
+            "human_approval_required": True,
+            "max_physical_launches": 1,
+            "independent_review_required": True,
+        },
         "determinism": {
             "cublas_workspace_config": ":4096:8",
             "deterministic_algorithms": True,

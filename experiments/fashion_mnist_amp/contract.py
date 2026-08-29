@@ -79,16 +79,19 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     model = config.get("model")
     comparison = config.get("comparison")
     budget = config.get("budget")
+    governance = config.get("governance")
     determinism = config.get("determinism")
     _require(isinstance(dataset, dict), "dataset config is required")
     _require(isinstance(model, dict), "model config is required")
     _require(isinstance(comparison, dict), "comparison config is required")
     _require(isinstance(budget, dict), "budget config is required")
+    _require(isinstance(governance, dict), "governance config is required")
     _require(isinstance(determinism, dict), "determinism config is required")
     dataset = cast(Dict[str, Any], dataset)
     model = cast(Dict[str, Any], model)
     comparison = cast(Dict[str, Any], comparison)
     budget = cast(Dict[str, Any], budget)
+    governance = cast(Dict[str, Any], governance)
     determinism = cast(Dict[str, Any], determinism)
 
     _require(dataset.get("name") == "FashionMNIST", "only FashionMNIST is allowlisted")
@@ -188,6 +191,16 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "tf32": False,
         },
         "determinism settings must match the v1 contract",
+    )
+    _require(
+        governance
+        == {
+            "risk_level": "R2",
+            "human_approval_required": True,
+            "max_physical_launches": 1,
+            "independent_review_required": True,
+        },
+        "governance settings must require R2 human approval and independent review",
     )
     seed = config.get("seed")
     _require(

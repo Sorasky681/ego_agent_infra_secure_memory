@@ -8,6 +8,8 @@ FP32 and CUDA AMP inference on the same frozen test samples. The research result
 The runner is intentionally strict:
 
 - `synthetic=false`, the allowlisted upstream and MIT license are frozen in config;
+- the run is deliberately R2 even though it is cheap: exact human approval and an
+  independent Reviewer remain mandatory;
 - `CUDA_VISIBLE_DEVICES` and Torch must expose exactly one GPU;
 - there is no CPU fallback and no arbitrary command field;
 - wall time is capped at 900 seconds / 0.25 GPU-hours;
