@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api check-api test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api check-api test-benchmark benchmark test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -15,7 +15,7 @@ install-mcp:
 install-web:
 	npm --prefix apps/web ci
 
-test: test-api check-api test-mcp test-web verify
+test: test-api check-api test-benchmark test-mcp test-web verify
 
 test-api:
 	$(UV) run --python 3.9 --extra dev pytest tests/api
@@ -23,6 +23,14 @@ test-api:
 check-api:
 	$(UV) run --python 3.9 --extra dev ruff check apps/api tests/api
 	$(UV) run --python 3.9 --extra dev mypy apps/api
+
+test-benchmark:
+	$(UV) run --python 3.9 --extra dev pytest tests/benchmarks
+	$(UV) run --python 3.9 --extra dev ruff check benchmarks tests/benchmarks
+	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --repetitions 2 --strict --output-json /tmp/rxp-bench-ci.json --output-md /tmp/rxp-bench-ci.md
+
+benchmark:
+	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --strict
 
 test-web:
 	npm --prefix apps/web test

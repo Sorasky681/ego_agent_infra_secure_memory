@@ -1,0 +1,158 @@
+"""CLI runner for the versioned RXP benchmark corpus."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Sequence
+
+from benchmarks import BENCHMARK_VERSION
+from benchmarks.model import Observation, canonical_json, canonical_sha256, derive_seed, load_corpus
+from benchmarks.profiles import AgentTeamsRXPProfile, DeterministicCoreProfile, NaiveFixedProfile
+from benchmarks.profiles.base import Profile
+from benchmarks.report import render_markdown
+from benchmarks.statistics import summarize
+
+
+PROFILE_TYPES = {
+    NaiveFixedProfile.name: NaiveFixedProfile,
+    DeterministicCoreProfile.name: DeterministicCoreProfile,
+    AgentTeamsRXPProfile.name: AgentTeamsRXPProfile,
+}
+
+
+def _git(args: Sequence[str]) -> str:
+    try:
+        return subprocess.check_output(
+            ["git"] + list(args), text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def environment_metadata() -> Dict[str, Any]:
+    dirty = _git(["status", "--porcelain"])
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "unknown",
+        "python": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "git_commit": _git(["rev-parse", "HEAD"]),
+        "git_dirty": dirty not in {"", "unknown"},
+        "cpu_count": os.cpu_count(),
+        "gpu": "not requested / not used",
+        "execution_class": "local synthetic CPU-only control-plane benchmark",
+    }
+
+
+def _semantic_projection(observations: List[Observation]) -> List[Dict[str, Any]]:
+    excluded = {"latency_ms", "mttr_ms", "details"}
+    return [
+        {key: value for key, value in item.to_dict().items() if key not in excluded}
+        for item in observations
+    ]
+
+
+def run_benchmark(
+    profiles: List[Profile], repetitions: int, master_seed: int
+) -> Dict[str, Any]:
+    if repetitions < 1:
+        raise ValueError("repetitions must be at least 1")
+    corpus = load_corpus()
+    observations: List[Observation] = []
+    with tempfile.TemporaryDirectory(prefix="rxp-bench-") as temporary:
+        temp_root = Path(temporary)
+        for profile in profiles:
+            for scenario in corpus.scenarios:
+                for repetition in range(repetitions):
+                    seed = derive_seed(master_seed, scenario.id, repetition)
+                    trial_dir = temp_root / profile.name / scenario.id / str(repetition)
+                    trial_dir.mkdir(parents=True, exist_ok=True)
+                    observations.append(
+                        profile.run(scenario, seed, repetition, trial_dir)
+                    )
+    summary = summarize(observations)
+    semantic_projection = _semantic_projection(observations)
+    return {
+        "schema_version": "rxp-bench-result/v1",
+        "benchmark": BENCHMARK_VERSION,
+        "corpus_version": corpus.corpus_version,
+        "corpus_digest": corpus.digest,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "environment": environment_metadata(),
+        "configuration": {
+            "master_seed": master_seed,
+            "repetitions": repetitions,
+            "profile_order": [profile.name for profile in profiles],
+            "canonical_json": "UTF-8, sorted keys, compact separators, NaN forbidden",
+        },
+        "scenarios": [asdict(scenario) for scenario in corpus.scenarios],
+        "trials": [observation.to_dict() for observation in observations],
+        "summary": summary,
+        "semantic_digest": canonical_sha256(semantic_projection),
+    }
+
+
+def strict_failures(result: Dict[str, Any]) -> List[str]:
+    failures = []
+    core = result["summary"]["profiles"].get(DeterministicCoreProfile.name)
+    if core:
+        if core["errors"]:
+            failures.append("deterministic core produced %d errors" % core["errors"])
+        if core["scenario_success"]["successes"] != core["scenario_success"]["n"]:
+            failures.append("one or more executed deterministic-core scenarios failed")
+        bypass = core["approval_bypass_success"]
+        if bypass["successes"] != 0:
+            failures.append("approval bypass succeeded %d times" % bypass["successes"])
+    return failures
+
+
+def _parse_profiles(value: str) -> List[Profile]:
+    names = list(PROFILE_TYPES) if value == "all" else [item.strip() for item in value.split(",")]
+    unknown = [name for name in names if name not in PROFILE_TYPES]
+    if unknown:
+        raise ValueError("unknown profiles: %s" % ", ".join(unknown))
+    return [PROFILE_TYPES[name]() for name in names]
+
+
+def main(argv: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profiles", default="all", help="all or comma-separated profile names")
+    parser.add_argument("--repetitions", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--output-json", type=Path, default=Path("benchmarks/artifacts/latest.json"))
+    parser.add_argument("--output-md", type=Path, default=Path("benchmarks/artifacts/latest.md"))
+    parser.add_argument("--strict", action="store_true")
+    args = parser.parse_args(list(argv) if argv else None)
+    corpus = load_corpus()
+    repetitions = args.repetitions or corpus.default_repetitions
+    master_seed = corpus.master_seed if args.seed is None else args.seed
+    try:
+        profiles = _parse_profiles(args.profiles)
+        result = run_benchmark(profiles, repetitions, master_seed)
+    except ValueError as error:
+        parser.error(str(error))
+        return 2
+    args.output_json.parent.mkdir(parents=True, exist_ok=True)
+    args.output_md.parent.mkdir(parents=True, exist_ok=True)
+    args.output_json.write_text(canonical_json(result) + "\n", encoding="utf-8")
+    args.output_md.write_text(render_markdown(result), encoding="utf-8")
+    print("Wrote %s" % args.output_json)
+    print("Wrote %s" % args.output_md)
+    print("Semantic digest: %s" % result["semantic_digest"])
+    failures = strict_failures(result) if args.strict else []
+    for failure in failures:
+        print("STRICT FAILURE: %s" % failure, file=sys.stderr)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

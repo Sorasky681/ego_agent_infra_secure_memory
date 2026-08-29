@@ -21,16 +21,20 @@ dev = [
   "ruff>=0.11,<0.15",
 ]
 
+[project.scripts]
+rxp-bench = "benchmarks.runner:main"
+
 [tool.setuptools.packages.find]
-include = ["apps.api*"]
+include = ["apps.api*", "benchmarks*"]
 namespaces = true
 
 [tool.setuptools.package-data]
 "apps.api" = ["fixtures/*.yaml"]
+"benchmarks" = ["corpus/v1/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests/api"]
+testpaths = ["tests/api", "tests/benchmarks"]
 pythonpath = ["."]
 
 [tool.ruff]

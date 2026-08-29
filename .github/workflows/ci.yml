@@ -89,6 +89,43 @@ jobs:
           uv run --python 3.12 --project mcp_servers --extra dev --locked
           ruff check tests/integration
 
+  benchmark:
+    name: RXP benchmark (Python 3.9)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install benchmark dependencies
+        run: uv sync --python 3.9 --extra dev --locked
+
+      - name: Run golden benchmark tests
+        run: uv run --python 3.9 --extra dev --locked pytest tests/benchmarks
+
+      - name: Lint benchmark
+        run: uv run --python 3.9 --extra dev --locked ruff check benchmarks tests/benchmarks
+
+      - name: Run strict benchmark smoke suite
+        run: >-
+          uv run --python 3.9 --extra dev --locked python -m benchmarks.runner
+          --repetitions 2 --strict
+          --output-json /tmp/rxp-bench-ci.json
+          --output-md /tmp/rxp-bench-ci.md
+
   web:
     name: Web (Node 24.15+)
     runs-on: ubuntu-latest
@@ -125,6 +162,7 @@ jobs:
       - api
       - mcp
       - web
+      - benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
