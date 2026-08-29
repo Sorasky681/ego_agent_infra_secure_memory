@@ -247,11 +247,11 @@ make install
 make test
 ```
 
-截至 **2026-08-29** 的当前提交快照为 **209 个测试**：API 56、RXP 26、Skills 6、
-Semifinal proof 1、Benchmark 28、Acceptance 16、AgentTeams 28、Experiments 13、MCP 23、
+截至 **2026-08-29** 的当前提交快照为 **210 个测试**：API 56、RXP 26、Skills 6、
+Semifinal proof 2、Benchmark 28、Acceptance 16、AgentTeams 28、Experiments 13、MCP 23、
 Web 12。这个数字是带日期的提交证据，不是永久承诺；后续提交应以实时 `make test` 与
 CI 输出为准。真实本地 PostgreSQL 16.14 集成套件为 27/27，因需要显式数据库 URL，
-不计入上述默认 209。
+不计入上述默认 210。
 
 分项运行：
 

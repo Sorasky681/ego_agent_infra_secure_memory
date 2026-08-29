@@ -27,4 +27,4 @@ checksum covers timestamps and measured latency. The semantic digest excludes ti
 diagnostic detail so a repeated run can prove outcome agreement despite normal wall-clock
 jitter. It includes the verified trace and evidence roots when a live target executes. A second
 local run with the same corpus/seed produced the same semantic digest:
-`59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80`.
+`05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996`.

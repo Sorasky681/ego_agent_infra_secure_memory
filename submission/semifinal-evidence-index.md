@@ -44,17 +44,17 @@ fail-closed: without live AgentTeams evidence it exits non-zero and records SKIP
 ## Frozen identifiers
 
 - Semifinal proof SHA-256:
-  `fbb49491dcaefbeb31921b6801df300b2b60dfe93500b0308bc4f93804098c26`
+  `b8142cb5b3d3e2b8ca6e500bab0b3c982f80a5b5e58fdd3da06b70bef9e1a2ed`
 - RXP demo SHA-256:
   `178a24b303f13a480262498cd793fba6fe63570ceedb27928805b7c321362524`
 - RXP ledger root:
   `sha256:2e313a284dcaaa6542d9d81919fc22bb61ab2015e18659f2dc0d323cbad47fd3`
 - Benchmark semantic digest:
-  `59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80`
+  `05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996`
 - Semifinal PPTX SHA-256:
-  `fed29fe58f4a298006b95f1699bfe4e849e4d8e2464add5f1ebb61db23829db7`
+  `c9cb26a5d21de9a86c641b65d4f137b04cecc6978500b10330dded004bc4cece`
 - Semifinal PDF SHA-256:
-  `e6cc5c608f460d3cfc4ecdd11e0d3059fac074b0e29083771a57eb9f4b87a583`
+  `dc9a6d7a254cb983788221d1e73291cde44aa70ec52618bed19ed63c027e54a4`
 - Cockpit screenshot SHA-256:
   `28bc08a6b01d81c43a53bd1a866148c6a9b3edc31ca714f8ab2b571e31c73c3b`
 

@@ -24,21 +24,21 @@
       "corpus_version": "1.0.0",
       "files": [
         {
-          "bytes": 181293,
+          "bytes": 195542,
           "path": "benchmarks/artifacts/2026-08-29-local-cpu.json",
-          "sha256": "626799eca42d405b498cf21cca32057276447f6050dd7ff76b62f63dad557667",
+          "sha256": "4c6918a43ccbe59e7ab6b33167c18ab4bc1dce8fd5455e3370faaeb47eda3440",
           "tracked": true
         },
         {
           "bytes": 3739,
           "path": "benchmarks/artifacts/2026-08-29-local-cpu.md",
-          "sha256": "ad5260617b5185503035ddd6d3ca2e103074387be28d422eace26dd610e01ec5",
+          "sha256": "1e63c2abf417f80ac733eefb3de76322e02d8974ac52c4de050b34b764f20e63",
           "tracked": true
         },
         {
           "bytes": 182,
           "path": "benchmarks/artifacts/2026-08-29-local-cpu.sha256",
-          "sha256": "cc401b267447cd00ed349c9aeb607e63976459f8bbee735ea784629c348bee50",
+          "sha256": "a01e11cd76dbcef571b42d4b109dfcf7d3ff8648d6d985d5f289cb5f69d403c7",
           "tracked": true
         },
         {
@@ -85,7 +85,7 @@
         }
       ],
       "repetitions": 5,
-      "semantic_digest": "59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80",
+      "semantic_digest": "05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996",
       "status": "VERIFIED_COMMITTED_ARTIFACT",
       "truth_boundary": "Committed local synthetic CPU control-plane benchmark; target live AgentTeams trials are all SKIP and are never counted as PASS.",
       "verification_scope": "local synthetic CPU-only control-plane benchmark"
@@ -94,14 +94,14 @@
       "database_image_observed_in_committed_proof": "postgres:16-alpine",
       "engine": "PostgreSQL",
       "file": {
-        "bytes": 1338,
+        "bytes": 2188,
         "path": "docs/evidence/postgres-local-proof-2026-08-29.md",
-        "sha256": "364edd136b9294a4157b61885558bf55b0bceeb21fbdc0df9d476f8687d8ef07",
+        "sha256": "23b54915543fdfdc88a3a4e2c165e152c78760e39e70aa0d23580cc59d2bf17c",
         "tracked": true
       },
       "proof_reexecuted_by_builder": false,
       "status": "VERIFIED_FROM_COMMITTED_LOCAL_PROOF",
-      "tests_passed": 10,
+      "tests_passed": 27,
       "truth_boundary": "Index of a committed disposable local PostgreSQL proof; this builder does not re-run Docker, PolarDB, backup, failover, or PITR.",
       "version": "16.14"
     }

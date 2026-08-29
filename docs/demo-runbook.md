@@ -154,12 +154,12 @@ make benchmark
 ```
 
 Its semantic result digest is
-`59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80`.
+`05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996`.
 The deterministic core recorded 50 PASS and 20 capability SKIP trials. The scripted
 negative control recorded 70 deliberate FAIL trials. With no live AgentTeams target
 configured, all 70 target trials are `SKIP`, never PASS.
 
-The dated default-suite snapshot is 209 tests: API 56, RXP 26, Skills 6, semifinal proof 1,
+The dated default-suite snapshot is 210 tests: API 56, RXP 26, Skills 6, semifinal proof 2,
 Benchmark 28, Acceptance 16, AgentTeams 28, Experiments 13, MCP 23, and Web 12. Re-run
 instead of treating that number as permanent:
 

@@ -5,12 +5,12 @@ evidence URI is produced by the current repository and replayed successfully.
 
 ## Verification snapshot, 2026-08-29
 
-The default cross-component suite at this snapshot contains **209 tests**: API 56,
-RXP 26, Skills 6, semifinal proof 1, Benchmark 28, Acceptance 16, AgentTeams 28,
+The default cross-component suite at this snapshot contains **210 tests**: API 56,
+RXP 26, Skills 6, semifinal proof 2, Benchmark 28, Acceptance 16, AgentTeams 28,
 Experiments 13, MCP 23, and Web 12. This count is a dated commit snapshot, not a
 rolling promise. After any change, live `make test` and CI output are authoritative.
 The 27-test PostgreSQL 16.14 suite is listed separately because it requires an explicit
-real database URL and is not included in the default 209.
+real database URL and is not included in the default 210.
 
 | Claim | Current state | Required evidence |
 |---|---|---|
@@ -41,7 +41,7 @@ real database URL and is not included in the default 209.
 | AgentTeams bridge contract/state/fault behavior | verified with explicit contract fixtures; not live | 28 AgentTeams tests: official pins, PostgreSQL-capable checkpoints, full hash-chain verification, endpoint call shapes, result digests, reassign, R2, compensation, skill-evidence levels, and trace truth gates |
 | AgentTeams Matrix collaboration is live | not verified on this host | real Controller version/health, active Team and ready Workers, Project/workflow IDs, Matrix event IDs, official spawn/tool trace, content-addressed artifacts, scoped R2 receipt, final trace hash |
 | semifinal acceptance bundle detects incomplete or forged evidence | verified locally; origin remains unverified | 16 tests cover eight MVP acceptance scenarios, Matrix/Decision closure, receipt uniqueness, raw metric policy, trace consistency, recovery checkpoints, resource limits, and negative origin promotion |
-| committed RXP Bench artifact is reproducible infrastructure evidence | verified as a synthetic local artifact | 14 scenarios × 5 repetitions × 3 profiles = 210 trials; corpus digest `eed5d4e06adc4713a765b3961643cda538b393bf651a848a24077a77b15098a4`; semantic result digest `59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80` |
+| committed RXP Bench artifact is reproducible infrastructure evidence | verified as a synthetic local artifact | 14 scenarios × 5 repetitions × 3 profiles = 210 trials; corpus digest `eed5d4e06adc4713a765b3961643cda538b393bf651a848a24077a77b15098a4`; semantic result digest `05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996` |
 | canonical 14-scenario AgentTeams target benchmark passes | not claimed; 70/70 target trials are honest `SKIP` in the committed artifact because no live target was configured | 28 benchmark tests enforce one scenario-specific live trace per seed; generic completion is rejected and missing live bindings remain `SKIP`, never PASS |
 | Higress isolates upstream credentials | not configured | route export + positive/negative leak test |
 | Nacos Skill is published | not configured; local registry proof is not publication | registry version response + package digest + online rollout status |

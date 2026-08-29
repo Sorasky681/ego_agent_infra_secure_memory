@@ -78,7 +78,7 @@ Skill runtime、可持久恢复的 AgentTeams bridge、PostgreSQL 生产数据�
 
 | 命令 | 结果 | 结论边界 |
 |---|---|---|
-| `make test` | 209 tests passed：API 56、RXP 26、Skills 6、Proof 1、Benchmark 28、Acceptance 16、AgentTeams 28、Experiments 13、MCP 23、Web 12 | 证明当前仓库默认本地/contract 行为；不证明外部 origin |
+| `make test` | 210 tests passed：API 56、RXP 26、Skills 6、Proof 2、Benchmark 28、Acceptance 16、AgentTeams 28、Experiments 13、MCP 23、Web 12 | 证明当前仓库默认本地/contract 行为；不证明外部 origin |
 | `make test-agentteams check-agentteams` | 28 tests passed；Ruff、mypy 通过；official lock shape 通过离线检查 | 证明 bridge/fixture contract、PostgreSQL adapter contract 与静态 pin 形状；**没有**验证 upstream bytes 或 live 服务 |
 | `make test-rxp test-skills` | RXP 26 tests、Skill 6 tests passed；schema drift check 通过 | 证明 reference/local runtime 行为，不是分布式部署或 Worker live invocation |
 | `make test-benchmark` | benchmark 28 tests passed；Ruff、mypy 与 strict local replay 通过 | local strict 允许 target capability gap 为 `SKIP`；它不是 AgentTeams release gate |

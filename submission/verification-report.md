@@ -23,8 +23,8 @@ inferred from local tests.
 | Web | `make test-web` | 12 passed; Vite production build PASS |
 | Submission policy | `make verify` | fail-closed deliverable, proof, boundary, and secret checks PASS |
 
-The full `make test` run covers 209 tests across these Python/TypeScript groups: API 56,
-RXP 26, Skills 6, Proof 1, Benchmark 28, Acceptance 16, AgentTeams 28, Experiments 13,
+The full `make test` run covers 210 tests across these Python/TypeScript groups: API 56,
+RXP 26, Skills 6, Proof 2, Benchmark 28, Acceptance 16, AgentTeams 28, Experiments 13,
 MCP 23, and Web 12. Ruff
 and MyPy pass for the API, RXP, Skill runtime, benchmark, and AgentTeams bridge. Counts
 are a dated snapshot, not a timeless project claim; CI and the evidence index are the
@@ -34,7 +34,7 @@ authoritative replay path.
 
 `make demo-proof` rebuilds the proof twice and requires byte freshness. The committed
 bundle is `submission/evidence/semifinal-local-proof.json`; its sidecar SHA-256 is
-`fbb49491dcaefbeb31921b6801df300b2b60dfe93500b0308bc4f93804098c26`.
+`b8142cb5b3d3e2b8ca6e500bab0b3c982f80a5b5e58fdd3da06b70bef9e1a2ed`.
 
 - RXP fixture: `2 / 2 COMPLETE`, 23 append-only entries, structural/signature checks
   PASS, and two independently generated files are byte-identical.
@@ -54,7 +54,7 @@ fixture HMAC key is not production signature trust.
 
 Committed artifact: `benchmarks/artifacts/2026-08-29-local-cpu.{json,md,sha256}`.
 Five seeded repetitions produce 210 trials and semantic digest
-`59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80`.
+`05cab481a525210026d07377bb841ca0cd73f27790e9856b3c29211320b6b996`.
 
 | Profile | PASS | FAIL | SKIP | Scenario clusters | Interpretation |
 |---|---:|---:|---:|---:|---|

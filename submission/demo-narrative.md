@@ -73,7 +73,7 @@ slide.”
 
 ## Claim boundary to say aloud
 
-The default suite has 209 passing local/contract tests. A separate disposable PostgreSQL
+The default suite has 210 passing local/contract tests. A separate disposable PostgreSQL
 16.14 suite has 27 passing integration tests. The hosted browser replay is synthetic. The
 official AgentTeams Controller/Team/Matrix run, trusted GPU origin, PolarDB deployment, managed
 backup/PITR restore, measured RPO/RTO, Higress, Nacos, and Aliyun services remain unverified or
