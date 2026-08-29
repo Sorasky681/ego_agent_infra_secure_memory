@@ -15,7 +15,7 @@
     "token_scope_mismatch": "pass",
     "worker_timeout_reassign": "skip"
   },
-  "naive-fixed-v1": {
+  "scripted-negative-control-v1": {
     "concurrent_duplicate": "fail",
     "crash_recovery": "fail",
     "evidence_tamper": "fail",

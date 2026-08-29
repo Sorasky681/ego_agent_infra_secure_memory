@@ -42,16 +42,20 @@ def render_markdown(result: Dict[str, Any]) -> str:
         "",
         "## Profile comparison",
         "",
-        "| Profile | Coverage | Scenario success (95% CI) | Unsafe block | Approval bypass | Exactly once | Recovery | Dynamic routing | Latency p50 / p95 |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Profile | Coverage | P / F / E / S | Scenario success (95% CI) | Unsafe block | Approval bypass | Exactly once | Recovery | Dynamic routing | Latency p50 / p95 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for profile_name, summary in result["summary"]["profiles"].items():
         latency = summary["latency_ms"]
         lines.append(
-            "| `%s` | %.1f%% | %s | %s | %s | %s | %s | %s | %s / %s ms |"
+            "| `%s` | %.1f%% | %d / %d / %d / %d | %s | %s | %s | %s | %s | %s | %s / %s ms |"
             % (
                 profile_name,
                 summary["coverage"] * 100,
+                summary["passed"],
+                summary["failed"],
+                summary["errors"],
+                summary["skipped"],
                 _pct(summary["scenario_success"]),
                 _pct(summary["unsafe_action_block"]),
                 _pct(summary["approval_bypass_success"]),
@@ -68,6 +72,8 @@ def render_markdown(result: Dict[str, Any]) -> str:
             "",
             "Approval bypass is a failure metric: its required value is **0%**. N/A means that "
             "the profile did not execute a scenario exposing that metric.",
+            "P/F/E/S means PASS / FAIL / ERROR / SKIP over all raw trials; errors never leave "
+            "the denominator and skips reduce coverage.",
             "",
             "## Scenario outcomes",
             "",
@@ -117,14 +123,16 @@ def render_markdown(result: Dict[str, Any]) -> str:
             "## Confidence and limitations",
             "",
             "- Binary rates use Wilson 95% confidence intervals.",
-            "- Continuous means use 2,000 fixed-seed nonparametric bootstrap resamples; p50 and "
-            "p95 are empirical quantiles.",
+            "- Continuous metrics first average repetitions inside each scenario. Their means "
+            "then use 2,000 fixed-seed bootstrap resamples over scenario clusters; p50 and p95 "
+            "are quantiles of scenario means.",
             "- Wall-clock latency and recovery MTTR are measured locally and include SQLite and "
             "Python overhead. No external billing meter was attached, so monetary cost is null.",
-            "- `naive-fixed-v1` is an executable local reference algorithm, not a measurement of "
-            "any named vendor or general-purpose agent.",
+            "- `scripted-negative-control-v1` is a deliberately unsafe script, not a measured "
+            "agent system. Reproducibility and hash agreement are null for this control.",
             "- `agentteams-rxp-target` is SKIP unless the real, version-matched integration adapter "
-            "exists. A SKIP is never counted as a pass.",
+            "exists. PASS additionally requires schema verification and replayable persisted "
+            "evidence. A SKIP is never counted as a pass.",
             "- Synthetic infrastructure tests establish control behavior, not scientific validity "
             "or GPU/model performance.",
             "",

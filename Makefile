@@ -45,7 +45,8 @@ benchmark:
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --strict
 
 benchmark-release:
-	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --profiles agentteams-rxp-target --release-gate agentteams-rxp-target
+	@test -n "$(EVIDENCE_DIR)" || (echo "EVIDENCE_DIR must name a new or empty persistent directory" >&2; exit 2)
+	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --profiles agentteams-rxp-target --release-gate agentteams-rxp-target --evidence-dir "$(EVIDENCE_DIR)"
 
 test-agentteams:
 	$(UV) run --python 3.9 --extra dev pytest tests/agentteams

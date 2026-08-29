@@ -17,7 +17,7 @@
 事件不得冒充 AgentTeams，核心 Skill 必须有可运行证据，数据、trace 与结果不得伪造。
 因此本 benchmark 强制以下语义：
 
-- `naive-fixed-v1` 只作为比较基线，永远不能作为 AgentTeams 合规证据；
+- `scripted-negative-control-v1` 是明示的脚本化负对照，不是被测 Agent 系统，永远不能作为 AgentTeams 合规证据；
 - `agentteams-rxp-target` 缺少真实、版本匹配的 adapter 时只能 `SKIP`；
 - `SKIP` 降低 coverage，绝不进入 pass 分母；
 - 金额成本、GPU 结果和未接入协议均为 `null`/`SKIP`；

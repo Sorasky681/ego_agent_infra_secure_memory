@@ -57,6 +57,8 @@ class Observation:
     reproducible: Optional[bool] = None
     hash_agreement: Optional[bool] = None
     dynamically_routed: Optional[bool] = None
+    trace_root: Optional[str] = None
+    evidence_root: Optional[str] = None
     external_cost_usd: Optional[float] = None
     assertions: List[str] = field(default_factory=list)
     implementation_path: str = ""

@@ -109,22 +109,57 @@ def _continuous(values: List[float], seed_material: str) -> Dict[str, Any]:
     }
 
 
+def _clustered_continuous(
+    observations: List[Observation],
+    selector: Callable[[Observation], Optional[float]],
+    seed_material: str,
+) -> Dict[str, Any]:
+    """Average repetitions inside each scenario before cross-scenario statistics."""
+
+    clusters: Dict[str, List[float]] = {}
+    trial_n = 0
+    for observation in observations:
+        value = selector(observation)
+        if value is None:
+            continue
+        trial_n += 1
+        clusters.setdefault(observation.scenario_id, []).append(float(value))
+    scenario_means = [statistics.fmean(values) for values in clusters.values()]
+    result = _continuous(scenario_means, seed_material)
+    result.update(
+        {
+            "trial_n": trial_n,
+            "cluster_n": len(scenario_means),
+            "independence_unit": "scenario",
+            "repetition_rule": "mean within scenario",
+        }
+    )
+    return result
+
+
 def summarize(observations: List[Observation]) -> Dict[str, Any]:
     profiles: Dict[str, Any] = {}
     for profile_name in sorted({item.profile for item in observations}):
         all_trials = [item for item in observations if item.profile == profile_name]
         attempted = [item for item in all_trials if item.status != "skip"]
         measured = [item for item in attempted if item.status != "error"]
-        latency = [item.latency_ms for item in attempted]
-        mttr = [item.mttr_ms for item in measured if item.mttr_ms is not None]
         costs = [item.external_cost_usd for item in measured if item.external_cost_usd is not None]
         profile_summary: Dict[str, Any] = {
             "trials": len(all_trials),
             "executed": len(attempted),
+            "passed": sum(item.status == "pass" for item in all_trials),
             "skipped": sum(item.status == "skip" for item in all_trials),
             "errors": sum(item.status == "error" for item in all_trials),
             "failed": sum(item.status == "fail" for item in all_trials),
             "coverage": len(attempted) / len(all_trials) if all_trials else 0.0,
+            "denominators": {
+                "all_trials": len(all_trials),
+                "executed_including_errors": len(attempted),
+                "measured_excluding_errors_and_skips": len(measured),
+                "scenario_clusters_with_attempts": len(
+                    {item.scenario_id for item in attempted}
+                ),
+            },
             "scenario_success": _clustered_proportion(
                 attempted, lambda item: item.status == "pass"
             ),
@@ -148,33 +183,40 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
             "dynamic_routing": _clustered_proportion(
                 measured, lambda item: item.dynamically_routed
             ),
-            "trace_completeness": _continuous(
-                [
-                    item.trace_completeness
-                    for item in measured
-                    if item.trace_completeness is not None
-                ],
+            "trace_completeness": _clustered_continuous(
+                measured,
+                lambda item: item.trace_completeness,
                 "%s:trace" % profile_name,
             ),
-            "evidence_completeness": _continuous(
-                [
-                    item.evidence_completeness
-                    for item in measured
-                    if item.evidence_completeness is not None
-                ],
+            "evidence_completeness": _clustered_continuous(
+                measured,
+                lambda item: item.evidence_completeness,
                 "%s:evidence" % profile_name,
             ),
-            "latency_ms": _continuous(latency, "%s:latency" % profile_name),
-            "mttr_ms": _continuous(mttr, "%s:mttr" % profile_name),
-            "operation_count": _continuous(
-                [float(item.operation_count) for item in measured],
+            "latency_ms": _clustered_continuous(
+                attempted,
+                lambda item: item.latency_ms,
+                "%s:latency" % profile_name,
+            ),
+            "mttr_ms": _clustered_continuous(
+                measured,
+                lambda item: item.mttr_ms,
+                "%s:mttr" % profile_name,
+            ),
+            "operation_count": _clustered_continuous(
+                measured,
+                lambda item: float(item.operation_count),
                 "%s:operations" % profile_name,
             ),
             "external_cost_usd": (
                 {
                     "status": "measured",
                     "total": sum(costs),
-                    "per_trial": _continuous(costs, "%s:cost" % profile_name),
+                    "per_scenario": _clustered_continuous(
+                        measured,
+                        lambda item: item.external_cost_usd,
+                        "%s:cost" % profile_name,
+                    ),
                 }
                 if costs
                 else {
@@ -196,7 +238,10 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
         "confidence": {
             "level": 0.95,
             "proportions": "Wilson score interval after collapsing repetitions by scenario",
-            "continuous_means": "fixed-seed nonparametric bootstrap, 2000 resamples",
+            "continuous_means": (
+                "fixed-seed nonparametric bootstrap over scenario-level repetition means, "
+                "2000 resamples"
+            ),
             "interpretation": (
                 "The scenario is the independence unit. Repetitions are collapsed before "
                 "binary confidence intervals and measure stability only; they do not establish "

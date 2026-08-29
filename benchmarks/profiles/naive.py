@@ -1,4 +1,4 @@
-"""Executable fixed-path reference baseline with intentionally missing safety controls."""
+"""Scripted negative control with intentionally missing safety controls."""
 
 from __future__ import annotations
 
@@ -6,19 +6,19 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from benchmarks.model import Observation, Scenario, canonical_sha256
+from benchmarks.model import Observation, Scenario
 from benchmarks.profiles.base import Profile
 
 
-class NaiveFixedProfile(Profile):
+class ScriptedNegativeControlProfile(Profile):
     """A local reference algorithm, not a claim about any external agent product.
 
     It follows a fixed plan, stores a final summary, and accepts all actions. That makes
     the missing controls executable and gives the deterministic core a stable comparator.
     """
 
-    name = "naive-fixed-v1"
-    description = "Local fixed-path black-box reference; no approval/evidence/lease controls."
+    name = "scripted-negative-control-v1"
+    description = "Scripted negative control; no approval, evidence, or lease controls."
 
     def run(
         self,
@@ -37,7 +37,9 @@ class NaiveFixedProfile(Profile):
                 "repetition": repetition,
                 "seed": seed,
                 "latency_ms": latency_ms,
-                "implementation_path": "benchmarks.profiles.naive.NaiveFixedProfile",
+                "implementation_path": (
+                    "benchmarks.profiles.naive.ScriptedNegativeControlProfile"
+                ),
                 "external_cost_usd": None,
             }
         )
@@ -50,16 +52,19 @@ class NaiveFixedProfile(Profile):
             "seed": seed,
             "evidence": ["summary", "metric_mean"],
         }
-        digest = canonical_sha256(fixed_summary)
         common: Dict[str, Any] = {
             "status": "fail",
             "operation_count": 1,
             "trace_completeness": 0.0,
             "evidence_completeness": 2.0 / 7.0,
-            "reproducible": True,
-            "hash_agreement": digest == canonical_sha256(dict(reversed(list(fixed_summary.items())))),
+            "reproducible": None,
+            "hash_agreement": None,
             "assertions": [],
-            "details": {"reference_only": True, "summary_digest": digest},
+            "details": {
+                "scripted_negative_control": True,
+                "not_a_system_measurement": True,
+                "fixed_summary": fixed_summary,
+            },
         }
         if scenario_id == "happy_path":
             common.update(

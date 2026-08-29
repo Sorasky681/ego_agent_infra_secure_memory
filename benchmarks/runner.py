@@ -11,19 +11,31 @@ import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Type
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 from benchmarks import BENCHMARK_VERSION
-from benchmarks.model import Observation, canonical_json, canonical_sha256, derive_seed, load_corpus
+from benchmarks.evidence_bundle import persist_evidence_bundle, replay_evidence_bundle
+from benchmarks.model import (
+    Observation,
+    Scenario,
+    canonical_json,
+    canonical_sha256,
+    derive_seed,
+    load_corpus,
+)
 from benchmarks.oracle import adjudicate
-from benchmarks.profiles import AgentTeamsRXPProfile, DeterministicCoreProfile, NaiveFixedProfile
+from benchmarks.profiles import (
+    AgentTeamsRXPProfile,
+    DeterministicCoreProfile,
+    ScriptedNegativeControlProfile,
+)
 from benchmarks.profiles.base import Profile
 from benchmarks.report import render_markdown
 from benchmarks.statistics import summarize
 
 
 PROFILE_TYPES: Dict[str, Type[Profile]] = {
-    NaiveFixedProfile.name: NaiveFixedProfile,
+    ScriptedNegativeControlProfile.name: ScriptedNegativeControlProfile,
     DeterministicCoreProfile.name: DeterministicCoreProfile,
     AgentTeamsRXPProfile.name: AgentTeamsRXPProfile,
 }
@@ -63,11 +75,20 @@ def _semantic_projection(observations: List[Observation]) -> List[Dict[str, Any]
 
 
 def run_benchmark(
-    profiles: List[Profile], repetitions: int, master_seed: int
+    profiles: List[Profile],
+    repetitions: int,
+    master_seed: int,
+    evidence_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be at least 1")
     corpus = load_corpus()
+    scenario_by_id = {scenario.id: scenario for scenario in corpus.scenarios}
+    if evidence_dir is not None:
+        evidence_dir = evidence_dir.resolve()
+        if evidence_dir.exists() and any(evidence_dir.iterdir()):
+            raise ValueError("evidence directory must be new or empty")
+        evidence_dir.mkdir(parents=True, exist_ok=True)
     observations: List[Observation] = []
     with tempfile.TemporaryDirectory(prefix="rxp-bench-") as temporary:
         temp_root = Path(temporary)
@@ -78,7 +99,16 @@ def run_benchmark(
                     trial_dir = temp_root / profile.name / scenario.id / str(repetition)
                     trial_dir.mkdir(parents=True, exist_ok=True)
                     raw_observation = profile.run(scenario, seed, repetition, trial_dir)
-                    observations.append(adjudicate(scenario, raw_observation))
+                    observation = adjudicate(scenario, raw_observation)
+                    if evidence_dir is not None and observation.trace_root:
+                        persist_evidence_bundle(
+                            observation,
+                            scenario=scenario_by_id[observation.scenario_id],
+                            seed=seed,
+                            trial_workspace=trial_dir,
+                            evidence_dir=evidence_dir,
+                        )
+                    observations.append(observation)
     summary = summarize(observations)
     semantic_projection = _semantic_projection(observations)
     return {
@@ -93,6 +123,11 @@ def run_benchmark(
             "repetitions": repetitions,
             "profile_order": [profile.name for profile in profiles],
             "canonical_json": "UTF-8, sorted keys, compact separators, NaN forbidden",
+            "evidence_persistence": {
+                "enabled": evidence_dir is not None,
+                "root": str(evidence_dir) if evidence_dir is not None else None,
+                "layout": "<profile>/<scenario>/repetition-NNN/{manifest.json,trace.json}",
+            },
         },
         "scenarios": [asdict(scenario) for scenario in corpus.scenarios],
         "trials": [observation.to_dict() for observation in observations],
@@ -123,7 +158,9 @@ def strict_failures(result: Dict[str, Any]) -> List[str]:
 
 
 def release_gate_failures(
-    result: Dict[str, Any], profile_name: str = AgentTeamsRXPProfile.name
+    result: Dict[str, Any],
+    profile_name: str = AgentTeamsRXPProfile.name,
+    evidence_dir: Optional[Path] = None,
 ) -> List[str]:
     """Fail closed unless the nominated release profile proves the full corpus.
 
@@ -135,6 +172,11 @@ def release_gate_failures(
     summary = result["summary"]["profiles"].get(profile_name)
     if summary is None:
         return ["release profile %s was not executed" % profile_name]
+
+    if evidence_dir is None:
+        failures.append("release gate requires a persistent --evidence-dir")
+    else:
+        evidence_dir = evidence_dir.resolve()
 
     expected_scenarios = {item["id"] for item in result["scenarios"]}
     repetitions = int(result["configuration"]["repetitions"])
@@ -200,6 +242,10 @@ def release_gate_failures(
             failures.append("%s did not prove deterministic replay" % label)
         if trial.get("hash_agreement") is not True:
             failures.append("%s did not prove cross-check hash agreement" % label)
+        if not trial.get("trace_root"):
+            failures.append("%s lacks a content-addressed trace root" % label)
+        if not trial.get("evidence_root"):
+            failures.append("%s lacks a content-addressed evidence root" % label)
         scenario_id = trial["scenario_id"]
         if scenario_id == "happy_path" and trial.get("task_completed") is not True:
             failures.append("%s did not complete" % label)
@@ -213,6 +259,24 @@ def release_gate_failures(
             failures.append("%s did not prove recovery" % label)
         if scenario_id in dynamic_scenarios and trial.get("dynamically_routed") is not True:
             failures.append("%s did not prove dynamic routing" % label)
+        if evidence_dir is not None:
+            bundle = (
+                evidence_dir
+                / profile_name
+                / scenario_id
+                / ("repetition-%03d" % int(trial["repetition"]))
+            )
+            scenario_data = next(
+                item for item in result["scenarios"] if item["id"] == scenario_id
+            )
+            try:
+                replay_evidence_bundle(
+                    bundle,
+                    scenario=Scenario(**scenario_data),
+                    observation=trial,
+                )
+            except (OSError, ValueError, KeyError, StopIteration) as error:
+                failures.append("%s evidence replay failed: %s" % (label, str(error)))
     return failures
 
 
@@ -231,6 +295,11 @@ def main(argv: Sequence[str] = ()) -> int:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output-json", type=Path, default=Path("benchmarks/artifacts/latest.json"))
     parser.add_argument("--output-md", type=Path, default=Path("benchmarks/artifacts/latest.md"))
+    parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        help="new or empty directory for persistent target trace bundles",
+    )
     parser.add_argument("--strict", action="store_true")
     parser.add_argument(
         "--release-gate",
@@ -246,7 +315,12 @@ def main(argv: Sequence[str] = ()) -> int:
     master_seed = corpus.master_seed if args.seed is None else args.seed
     try:
         profiles = _parse_profiles(args.profiles)
-        result = run_benchmark(profiles, repetitions, master_seed)
+        result = run_benchmark(
+            profiles,
+            repetitions,
+            master_seed,
+            evidence_dir=args.evidence_dir,
+        )
     except ValueError as error:
         parser.error(str(error))
         return 2
@@ -259,7 +333,13 @@ def main(argv: Sequence[str] = ()) -> int:
     print("Semantic digest: %s" % result["semantic_digest"])
     failures = strict_failures(result) if args.strict else []
     if args.release_gate:
-        failures.extend(release_gate_failures(result, args.release_gate))
+        failures.extend(
+            release_gate_failures(
+                result,
+                args.release_gate,
+                evidence_dir=args.evidence_dir,
+            )
+        )
     for failure in failures:
         print("GATE FAILURE: %s" % failure, file=sys.stderr)
     return 1 if failures else 0
