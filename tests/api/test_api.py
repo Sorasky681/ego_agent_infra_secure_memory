@@ -95,8 +95,17 @@ def test_e2e_happy_path_pauses_for_human_then_completes(client: TestClient) -> N
     assert payload["task"]["decision"] == "KEEP"
     assert payload["task"]["gate_result"]["status"] == "pass"
     assert payload["task"]["evidence_summary"]["missing"] == []
+    assert len(payload["task"]["memory_candidates"]) == 2
+    assert all(
+        item["status"] == "candidate" and item["proposed_by"] == "memory-agent"
+        for item in payload["task"]["memory_candidates"]
+    )
     assert len(payload["task"]["memories"]) == 2
     assert all(item["validated"] for item in payload["task"]["memories"])
+    assert all(item["candidate_id"] for item in payload["task"]["memories"])
+    assert all(
+        item["validated_by"] == "memory-validator" for item in payload["task"]["memories"]
+    )
     assert all(
         result["data_classification"] == "synthetic_demo"
         for result in payload["task"]["latest_evaluation"]
@@ -111,6 +120,13 @@ def test_e2e_happy_path_pauses_for_human_then_completes(client: TestClient) -> N
     assert len(plan_reviews) == 1
     assert plan_reviews[0]["actor"] == "reviewer-agent"
     assert plan_reviews[0]["payload"]["independent"] is True
+    candidate_events = [
+        event for event in events if event["event_type"] == "memory.candidate.proposed"
+    ]
+    validation_events = [event for event in events if event["event_type"] == "memory.validated"]
+    assert len(candidate_events) == len(validation_events) == 2
+    assert {event["actor"] for event in candidate_events} == {"memory-agent"}
+    assert {event["actor"] for event in validation_events} == {"memory-validator"}
     assert events[0]["previous_hash"] == "0" * 64
     for previous, current in zip(events, events[1:]):
         assert current["previous_hash"] == previous["event_hash"]

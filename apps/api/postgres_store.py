@@ -23,6 +23,7 @@ from .models import (
     ApprovalRecord,
     AuditEvent,
     EvidenceRecord,
+    MemoryCandidate,
     MemoryRecord,
     Stage,
     TaskRecord,
@@ -65,7 +66,12 @@ class PostgresStore:
     engine = "postgresql"
     audit_guarantee = "trigger_immutable_predecessor_guarded_hash_chain"
 
-    def __init__(self, database_url: str, tenant_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        tenant_id: Optional[str] = None,
+        migration_mode: Optional[str] = None,
+    ) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("PostgresStore requires a postgresql:// or postgres:// URL")
         self.database_url = database_url
@@ -76,6 +82,11 @@ class PostgresStore:
             raise ValueError("EGO_TENANT_ID must contain between 1 and 128 characters")
         self._lock = threading.RLock()
         self._transaction_local = threading.local()
+        self.migration_mode = migration_mode or os.getenv(
+            "EGO_DATABASE_MIGRATION_MODE", "apply"
+        ).strip()
+        if self.migration_mode not in {"apply", "verify"}:
+            raise ValueError("EGO_DATABASE_MIGRATION_MODE must be apply or verify")
         self.initialize()
 
     def _new_connection(self, *, autocommit: bool = False) -> Connection[Dict[str, Any]]:
@@ -169,6 +180,26 @@ class PostgresStore:
             (entry for entry in migration_root.iterdir() if entry.name.endswith(".sql")),
             key=lambda entry: entry.name,
         )
+        packaged = {
+            migration.name: hashlib.sha256(
+                migration.read_text(encoding="utf-8").encode("utf-8")
+            ).hexdigest()
+            for migration in migration_files
+        }
+        if self.migration_mode == "verify":
+            connection = self._new_connection()
+            try:
+                rows = connection.execute(
+                    "SELECT version, sha256 FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            finally:
+                connection.close()
+            observed = {str(row["version"]): str(row["sha256"]) for row in rows}
+            if observed != packaged:
+                raise RuntimeError(
+                    "database migrations do not exactly match packaged SQL in verify mode"
+                )
+            return
         connection = self._new_connection()
         try:
             connection.execute("BEGIN")
@@ -188,7 +219,7 @@ class PostgresStore:
             applied = {str(row["version"]): str(row["sha256"]) for row in rows}
             for migration in migration_files:
                 migration_sql = migration.read_text(encoding="utf-8")
-                migration_digest = hashlib.sha256(migration_sql.encode("utf-8")).hexdigest()
+                migration_digest = packaged[migration.name]
                 if migration.name in applied:
                     if applied[migration.name] != migration_digest:
                         raise RuntimeError(
@@ -474,6 +505,48 @@ class PostgresStore:
         finally:
             self._close(connection)
         return [EvidenceRecord.model_validate(_json_object(row["record_json"])) for row in rows]
+
+    def add_memory_candidate(self, record: MemoryCandidate) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                """
+                INSERT INTO memory_candidates(
+                    id, tenant_id, task_id, generation, evidence_digest, review_id,
+                    record_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    record.id,
+                    self.tenant_id,
+                    record.task_id,
+                    record.generation,
+                    record.evidence_digest,
+                    record.review_id,
+                    Jsonb(record.model_dump(mode="json")),
+                    record.created_at,
+                ),
+            )
+            self._commit(connection)
+        finally:
+            self._close(connection)
+
+    def list_memory_candidates(
+        self, task_id: str, generation: str
+    ) -> List[MemoryCandidate]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT record_json FROM memory_candidates
+                 WHERE tenant_id=%s AND task_id=%s AND generation=%s
+                 ORDER BY created_at, id
+                """,
+                (self.tenant_id, task_id, generation),
+            ).fetchall()
+        finally:
+            self._close(connection)
+        return [MemoryCandidate.model_validate(_json_object(row["record_json"])) for row in rows]
 
     def add_memory(self, record: MemoryRecord) -> None:
         connection = self._connect()
@@ -783,18 +856,21 @@ class PostgresStore:
                     (SELECT count(*) FROM tasks WHERE tenant_id=%s) AS tasks,
                     (SELECT count(*) FROM approvals WHERE tenant_id=%s) AS approvals,
                     (SELECT count(*) FROM evidence WHERE tenant_id=%s) AS evidence,
+                    (SELECT count(*) FROM memory_candidates
+                      WHERE tenant_id=%s) AS memory_candidates,
                     (SELECT count(*) FROM audit_events WHERE tenant_id=%s) AS events,
                     (SELECT count(*) FROM memories
                       WHERE tenant_id=%s AND validated IS TRUE) AS validated_memories
                 """,
-                (self.tenant_id,) * 5,
+                (self.tenant_id,) * 6,
             ).fetchone()
         finally:
             self._close(connection)
         if row is None:
             raise RuntimeError("PostgreSQL did not return store counts")
         return {name: int(row[name]) for name in (
-            "tasks", "approvals", "evidence", "events", "validated_memories"
+            "tasks", "approvals", "evidence", "memory_candidates", "events",
+            "validated_memories"
         )}
 
     @contextmanager

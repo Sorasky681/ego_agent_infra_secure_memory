@@ -4,7 +4,15 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
-from .models import ApprovalRecord, AuditEvent, EvidenceRecord, MemoryRecord, Stage, TaskRecord
+from .models import (
+    ApprovalRecord,
+    AuditEvent,
+    EvidenceRecord,
+    MemoryCandidate,
+    MemoryRecord,
+    Stage,
+    TaskRecord,
+)
 
 
 class ResearchStore(Protocol):
@@ -42,6 +50,12 @@ class ResearchStore(Protocol):
     def add_evidence(self, record: EvidenceRecord) -> None: ...
 
     def list_evidence(self, task_id: str, generation: str) -> List[EvidenceRecord]: ...
+
+    def add_memory_candidate(self, record: MemoryCandidate) -> None: ...
+
+    def list_memory_candidates(
+        self, task_id: str, generation: str
+    ) -> List[MemoryCandidate]: ...
 
     def add_memory(self, record: MemoryRecord) -> None: ...
 

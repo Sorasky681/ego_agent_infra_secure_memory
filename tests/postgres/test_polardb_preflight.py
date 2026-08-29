@@ -31,6 +31,8 @@ def _manifest(postgres_url: str, *, destructive: bool = False) -> dict:
             "reader_url_env": None,
             "runtime_url_env": None,
             "auditor_url_env": None,
+            "evidence_writer_url_env": None,
+            "memory_curator_url_env": None,
             "minimum_server_version_num": 120000,
             "require_tls": False,
             "require_polardb_marker": False,
@@ -43,6 +45,8 @@ def _manifest(postgres_url: str, *, destructive: bool = False) -> dict:
             "roles": {
                 "runtime": "egoagentos_runtime",
                 "auditor": "egoagentos_auditor",
+                "evidence_writer": "egoagentos_evidence_writer",
+                "memory_curator": "egoagentos_memory_curator",
             },
             "pgvector": "optional",
         },
@@ -118,6 +122,9 @@ def test_real_postgres_fresh_schema_replay_requires_and_preserves_all_gates(
     assert report["summary"]["status"] == "PASS"
     assert report["safety_gate"]["database_name"] == database_name
     assert report["result"]["security_roles_reapply_required"] is True
-    assert [row["version"] for row in report["result"]["migrations"]] == ["001_control_plane.sql"]
+    assert [row["version"] for row in report["result"]["migrations"]] == [
+        "001_control_plane.sql",
+        "002_ledger_boundaries.sql",
+    ]
     assert "audit_events" in report["result"]["tables"]
     assert report["truth_boundary"]["pitr_restore"] == "NOT_RUN"

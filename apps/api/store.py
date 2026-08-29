@@ -15,6 +15,7 @@ from .models import (
     ApprovalRecord,
     AuditEvent,
     EvidenceRecord,
+    MemoryCandidate,
     MemoryRecord,
     Stage,
     TaskRecord,
@@ -60,6 +61,42 @@ CREATE TABLE IF NOT EXISTS evidence (
 CREATE INDEX IF NOT EXISTS idx_evidence_task_generation
     ON evidence(task_id, generation, created_at);
 
+CREATE TRIGGER IF NOT EXISTS evidence_no_update
+BEFORE UPDATE ON evidence
+BEGIN
+    SELECT RAISE(ABORT, 'evidence ledger is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS evidence_no_delete
+BEFORE DELETE ON evidence
+BEGIN
+    SELECT RAISE(ABORT, 'evidence ledger is immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_candidates (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    evidence_digest TEXT NOT NULL,
+    review_id TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_candidates_task_generation
+    ON memory_candidates(task_id, generation, created_at);
+
+CREATE TRIGGER IF NOT EXISTS memory_candidates_no_update
+BEFORE UPDATE ON memory_candidates
+BEGIN
+    SELECT RAISE(ABORT, 'memory candidate ledger is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_candidates_no_delete
+BEFORE DELETE ON memory_candidates
+BEGIN
+    SELECT RAISE(ABORT, 'memory candidate ledger is immutable');
+END;
+
 CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -70,6 +107,18 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_memories_task_generation
     ON memories(task_id, generation, created_at);
+
+CREATE TRIGGER IF NOT EXISTS memories_no_update
+BEFORE UPDATE ON memories
+BEGIN
+    SELECT RAISE(ABORT, 'validated memory ledger is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_no_delete
+BEFORE DELETE ON memories
+BEGIN
+    SELECT RAISE(ABORT, 'validated memory ledger is immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS audit_events (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -537,6 +586,48 @@ class SQLiteStore:
                 self._close(connection)
         return [EvidenceRecord.model_validate_json(row["record_json"]) for row in rows]
 
+    def add_memory_candidate(self, record: MemoryCandidate) -> None:
+        with self._lock:
+            connection = self._connect()
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO memory_candidates(
+                        id, task_id, generation, evidence_digest, review_id,
+                        record_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.id,
+                        record.task_id,
+                        record.generation,
+                        record.evidence_digest,
+                        record.review_id,
+                        record.model_dump_json(),
+                        record.created_at.isoformat(),
+                    ),
+                )
+                self._commit(connection)
+            finally:
+                self._close(connection)
+
+    def list_memory_candidates(
+        self, task_id: str, generation: str
+    ) -> List[MemoryCandidate]:
+        with self._lock:
+            connection = self._connect()
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT record_json FROM memory_candidates
+                    WHERE task_id=? AND generation=? ORDER BY created_at, id
+                    """,
+                    (task_id, generation),
+                ).fetchall()
+            finally:
+                self._close(connection)
+        return [MemoryCandidate.model_validate_json(row["record_json"]) for row in rows]
+
     def add_memory(self, record: MemoryRecord) -> None:
         with self._lock:
             connection = self._connect()
@@ -809,6 +900,9 @@ class SQLiteStore:
                     "tasks": connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
                     "approvals": connection.execute("SELECT COUNT(*) FROM approvals").fetchone()[0],
                     "evidence": connection.execute("SELECT COUNT(*) FROM evidence").fetchone()[0],
+                    "memory_candidates": connection.execute(
+                        "SELECT COUNT(*) FROM memory_candidates"
+                    ).fetchone()[0],
                     "events": connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
                     "validated_memories": connection.execute(
                         "SELECT COUNT(*) FROM memories WHERE validated=1"

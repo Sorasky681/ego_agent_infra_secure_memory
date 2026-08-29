@@ -26,6 +26,7 @@ from .models import (
     GateStatus,
     IntegrationState,
     IntegrationTruth,
+    MemoryCandidate,
     MemoryRecord,
     MemorySignals,
     MetricEvidencePayload,
@@ -73,7 +74,12 @@ AGENT_ROLES = [
     ("runtime-agent", "Runtime", "Executes allowlisted experiment entrypoints"),
     ("evaluation-agent", "Evaluator", "Computes deterministic metrics and bootstrap CIs"),
     ("reviewer-agent", "Independent Reviewer", "Challenges design and verifies evidence"),
-    ("memory-agent", "Memory Curator", "Writes only independently validated memories"),
+    ("memory-agent", "Memory Curator", "Can append candidates but cannot validate them"),
+    (
+        "memory-validator",
+        "Memory Validator",
+        "Promotes candidates only after an independently passed evidence gate",
+    ),
 ]
 
 
@@ -319,6 +325,11 @@ class ResearchOpsService:
     def task_view(self, task: TaskRecord, include_evidence: bool = True) -> Dict[str, Any]:
         approval = self.store.latest_approval(task.id, task.generation)
         evidence = self.store.list_evidence(task.id, task.generation)
+        memory_candidates = (
+            self.store.list_memory_candidates(task.id, task.generation)
+            if include_evidence
+            else []
+        )
         memories = self.store.list_memories(task.id, task.generation) if include_evidence else []
         approval_view = self._approval_public(approval)
         task_payload = task.model_dump(mode="json")
@@ -343,6 +354,9 @@ class ResearchOpsService:
                     if include_evidence
                     else []
                 ),
+                "memory_candidates": [
+                    record.model_dump(mode="json") for record in memory_candidates
+                ],
                 "memories": [record.model_dump(mode="json") for record in memories],
                 "verification": (
                     {
@@ -735,12 +749,11 @@ class ResearchOpsService:
 
     def _enter_memory(self, task: TaskRecord) -> None:
         review_id = task.gate_result.independent_reviewer or ""
-        require_validated_memory(task.gate_result, review_id)
         evidence = self.store.list_evidence(task.id, task.generation)
         evidence_digest = canonical_sha256(sorted(record.artifact_digest for record in evidence))
-        records = [
-            MemoryRecord(
-                id="mem_%s" % uuid.uuid4().hex,
+        candidates = [
+            MemoryCandidate(
+                id="memcand_%s" % uuid.uuid4().hex,
                 task_id=task.id,
                 generation=task.generation,
                 memory_type="episodic",
@@ -751,10 +764,9 @@ class ResearchOpsService:
                 component="dataset-loader",
                 evidence_digest=evidence_digest,
                 review_id=review_id,
-                validated=True,
             ),
-            MemoryRecord(
-                id="mem_%s" % uuid.uuid4().hex,
+            MemoryCandidate(
+                id="memcand_%s" % uuid.uuid4().hex,
                 task_id=task.id,
                 generation=task.generation,
                 memory_type="procedural",
@@ -765,19 +777,50 @@ class ResearchOpsService:
                 component="dataset-manifest",
                 evidence_digest=evidence_digest,
                 review_id=review_id,
-                validated=True,
             ),
         ]
-        for record in records:
+        for candidate in candidates:
+            self.store.add_memory_candidate(candidate)
+            self.store.append_event(
+                task.id,
+                task.generation,
+                "memory.candidate.proposed",
+                "memory-agent",
+                Stage.MEMORY_SKILL,
+                {
+                    "candidate_id": candidate.id,
+                    "type": candidate.memory_type,
+                    "evidence_digest": evidence_digest,
+                    "review_id": review_id,
+                    "status": "candidate",
+                },
+            )
+
+        require_validated_memory(task.gate_result, review_id)
+        for candidate in candidates:
+            record = MemoryRecord(
+                id="mem_%s" % uuid.uuid4().hex,
+                task_id=candidate.task_id,
+                generation=candidate.generation,
+                memory_type=candidate.memory_type,
+                statement=candidate.statement,
+                component=candidate.component,
+                evidence_digest=candidate.evidence_digest,
+                review_id=candidate.review_id,
+                validated=True,
+                candidate_id=candidate.id,
+                validated_by="memory-validator",
+            )
             self.store.add_memory(record)
             self.store.append_event(
                 task.id,
                 task.generation,
                 "memory.validated",
-                "memory-agent",
+                "memory-validator",
                 Stage.MEMORY_SKILL,
                 {
                     "memory_id": record.id,
+                    "candidate_id": candidate.id,
                     "type": record.memory_type,
                     "evidence_digest": evidence_digest,
                     "review_id": review_id,

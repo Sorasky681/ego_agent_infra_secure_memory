@@ -43,9 +43,11 @@ EXPECTED_TABLES = (
     "audit_events",
     "evidence",
     "idempotency",
+    "memory_candidates",
     "memories",
     "tasks",
 )
+PRIVILEGE_TABLES = EXPECTED_TABLES + ("schema_migrations",)
 EXPECTED_RLS_TABLES = EXPECTED_TABLES
 EXPECTED_POLICIES = tuple("%s_tenant_policy" % table for table in EXPECTED_RLS_TABLES)
 EXPECTED_TRIGGERS = (
@@ -53,13 +55,26 @@ EXPECTED_TRIGGERS = (
     "audit_events_no_truncate",
     "audit_events_no_update_or_delete",
     "audit_events_stage_notify",
+    "evidence_no_truncate",
+    "evidence_no_update_or_delete",
+    "memory_candidates_no_truncate",
+    "memory_candidates_no_update_or_delete",
+    "memories_no_truncate",
+    "memories_no_update_or_delete",
 )
 EXPECTED_TRIGGER_FUNCTIONS = {
     "audit_events_guard_insert": "egoagentos_guard_audit_insert",
     "audit_events_no_truncate": "egoagentos_reject_audit_mutation",
     "audit_events_no_update_or_delete": "egoagentos_reject_audit_mutation",
     "audit_events_stage_notify": "egoagentos_notify_stage_event",
+    "evidence_no_truncate": "egoagentos_reject_ledger_mutation",
+    "evidence_no_update_or_delete": "egoagentos_reject_ledger_mutation",
+    "memory_candidates_no_truncate": "egoagentos_reject_ledger_mutation",
+    "memory_candidates_no_update_or_delete": "egoagentos_reject_ledger_mutation",
+    "memories_no_truncate": "egoagentos_reject_ledger_mutation",
+    "memories_no_update_or_delete": "egoagentos_reject_ledger_mutation",
 }
+ROLE_KEYS = ("runtime", "auditor", "evidence_writer", "memory_curator")
 DESTRUCTIVE_OPERATIONS = ("fresh_schema_replay", "pitr_restore", "multi_az_failover")
 
 
@@ -170,7 +185,14 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     expected_database = target.get("expected_database")
     if not isinstance(expected_database, str) or not SAFE_DATABASE.fullmatch(expected_database):
         raise ManifestError("target.expected_database must be an explicit safe database name")
-    for key in ("writer_url_env", "reader_url_env", "runtime_url_env", "auditor_url_env"):
+    for key in (
+        "writer_url_env",
+        "reader_url_env",
+        "runtime_url_env",
+        "auditor_url_env",
+        "evidence_writer_url_env",
+        "memory_curator_url_env",
+    ):
         name = target.get(key)
         if name is not None and (not isinstance(name, str) or not ENV_NAME.fullmatch(name)):
             raise ManifestError("target.%s must name an uppercase environment variable" % key)
@@ -185,7 +207,7 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     roles = target.get("roles", {})
     if not isinstance(roles, dict):
         raise ManifestError("target.roles must be an object")
-    for key in ("runtime", "auditor"):
+    for key in ROLE_KEYS:
         role = roles.get(key)
         if not isinstance(role, str) or not SAFE_DATABASE.fullmatch(role):
             raise ManifestError("target.roles.%s must be an explicit role name" % key)
@@ -343,7 +365,7 @@ class PostgresInspector:
         }
 
     def inspect_control_plane(
-        self, database_url: str, runtime_role: str, auditor_role: str
+        self, database_url: str, roles: Mapping[str, str]
     ) -> Dict[str, Any]:
         connection = self._connect(database_url)
         try:
@@ -368,9 +390,11 @@ class PostgresInspector:
                   JOIN pg_class AS c ON c.oid=t.tgrelid
                   JOIN pg_namespace AS n ON n.oid=c.relnamespace
                   JOIN pg_proc AS p ON p.oid=t.tgfoid
-                 WHERE n.nspname='public' AND c.relname='audit_events'
+                 WHERE n.nspname='public'
+                   AND c.relname = ANY(%s)
                    AND NOT t.tgisinternal ORDER BY t.tgname
-                """
+                """,
+                (["audit_events", "evidence", "memory_candidates", "memories"],),
             ).fetchall()
             policies = connection.execute(
                 """
@@ -393,15 +417,15 @@ class PostgresInspector:
                 /* egoagentos_preflight:roles */
                 SELECT rolname FROM pg_roles WHERE rolname = ANY(%s) ORDER BY rolname
                 """,
-                ([runtime_role, auditor_role],),
+                (list(roles.values()),),
             ).fetchall()
             existing_roles = {str(row["rolname"]) for row in role_rows}
             privileges: Dict[str, Dict[str, Dict[str, bool]]] = {}
-            for role in (runtime_role, auditor_role):
+            for role in roles.values():
                 if role not in existing_roles:
                     continue
                 role_privileges: Dict[str, Dict[str, bool]] = {}
-                for table in EXPECTED_TABLES:
+                for table in PRIVILEGE_TABLES:
                     row = connection.execute(
                         """
                         /* egoagentos_preflight:privileges */
@@ -575,21 +599,30 @@ class PostgresInspector:
 
 def _role_matrix_ok(
     privileges: Mapping[str, Mapping[str, Mapping[str, bool]]],
-    runtime_role: str,
-    auditor_role: str,
+    roles: Mapping[str, str],
 ) -> Dict[str, Any]:
+    runtime_role = roles["runtime"]
+    auditor_role = roles["auditor"]
+    evidence_writer_role = roles["evidence_writer"]
+    memory_curator_role = roles["memory_curator"]
     runtime = privileges.get(runtime_role, {})
     auditor = privileges.get(auditor_role, {})
+    evidence_writer = privileges.get(evidence_writer_role, {})
+    memory_curator = privileges.get(memory_curator_role, {})
     failures: List[str] = []
     runtime_write = {
         "tasks": {"insert", "update"},
         "approvals": {"insert", "update"},
         "evidence": {"insert"},
+        "memory_candidates": {"insert"},
         "memories": {"insert"},
         "audit_events": {"insert"},
         "idempotency": {"insert"},
+        "schema_migrations": set(),
     }
-    for table in EXPECTED_TABLES:
+    evidence_writer_read = {"tasks", "approvals", "evidence"}
+    memory_curator_read = {"tasks", "evidence", "memory_candidates", "memories"}
+    for table in PRIVILEGE_TABLES:
         row = runtime.get(table, {})
         if not row.get("select"):
             failures.append("%s lacks SELECT on %s" % (runtime_role, table))
@@ -602,6 +635,32 @@ def _role_matrix_ok(
             failures.append("%s lacks SELECT on %s" % (auditor_role, table))
         if any(auditor_row.get(action) for action in ("insert", "update", "delete")):
             failures.append("%s has mutation privilege on %s" % (auditor_role, table))
+        evidence_row = evidence_writer.get(table, {})
+        if bool(evidence_row.get("select")) != (table in evidence_writer_read):
+            failures.append(
+                "%s SELECT on %s expected %s"
+                % (evidence_writer_role, table, table in evidence_writer_read)
+            )
+        for action in ("insert", "update", "delete"):
+            expected = action == "insert" and table == "evidence"
+            if bool(evidence_row.get(action)) != expected:
+                failures.append(
+                    "%s %s on %s expected %s"
+                    % (evidence_writer_role, action, table, expected)
+                )
+        curator_row = memory_curator.get(table, {})
+        if bool(curator_row.get("select")) != (table in memory_curator_read):
+            failures.append(
+                "%s SELECT on %s expected %s"
+                % (memory_curator_role, table, table in memory_curator_read)
+            )
+        for action in ("insert", "update", "delete"):
+            expected = action == "insert" and table == "memory_candidates"
+            if bool(curator_row.get(action)) != expected:
+                failures.append(
+                    "%s %s on %s expected %s"
+                    % (memory_curator_role, action, table, expected)
+                )
     return {"ok": not failures, "failures": failures}
 
 
@@ -723,11 +782,20 @@ def run_preflight(
     if not writer_url:
         raise ManifestError("writer URL environment variable is unset")
     reader_url = _database_url_from_env(target, "reader_url_env", environ)
-    runtime_url = _database_url_from_env(target, "runtime_url_env", environ)
-    auditor_url = _database_url_from_env(target, "auditor_url_env", environ)
-    runtime_role = str(target["roles"]["runtime"])
-    auditor_role = str(target["roles"]["auditor"])
-    secrets = tuple(value for value in (writer_url, reader_url, runtime_url, auditor_url) if value)
+    role_urls = {
+        "runtime": _database_url_from_env(target, "runtime_url_env", environ),
+        "auditor": _database_url_from_env(target, "auditor_url_env", environ),
+        "evidence_writer": _database_url_from_env(
+            target, "evidence_writer_url_env", environ
+        ),
+        "memory_curator": _database_url_from_env(
+            target, "memory_curator_url_env", environ
+        ),
+    }
+    roles = {key: str(target["roles"][key]) for key in ROLE_KEYS}
+    secrets = tuple(
+        value for value in (writer_url, reader_url, *role_urls.values()) if value
+    )
     checks: Dict[str, Any] = {}
     endpoints: Dict[str, Mapping[str, Any]] = {}
     for label, url in (("writer", writer_url), ("reader", reader_url)):
@@ -756,7 +824,7 @@ def run_preflight(
     writer = endpoints.get("writer")
     if writer is not None:
         try:
-            catalog = probe.inspect_control_plane(writer_url, runtime_role, auditor_role)
+            catalog = probe.inspect_control_plane(writer_url, roles)
             table_map = {str(row["table_name"]): row for row in catalog["tables"]}
             missing_tables = sorted(set(EXPECTED_TABLES) - set(table_map))
             rls_missing = sorted(
@@ -806,7 +874,7 @@ def run_preflight(
                 for version in set(packaged_migrations) & set(observed_migrations)
                 if packaged_migrations[version] != observed_migrations[version]
             )
-            role_result = _role_matrix_ok(catalog["privileges"], runtime_role, auditor_role)
+            role_result = _role_matrix_ok(catalog["privileges"], roles)
             checks["control_plane"] = {
                 "schema": _check(
                     "PASS"
@@ -868,10 +936,10 @@ def run_preflight(
             "catalog": _check("SKIP", "writer connection failed", required=True)
         }
 
-    for label, url, expected_role in (
-        ("runtime_login", runtime_url, runtime_role),
-        ("auditor_login", auditor_url, auditor_role),
-    ):
+    for key in ROLE_KEYS:
+        label = "%s_login" % key
+        url = role_urls[key]
+        expected_role = roles[key]
         if not url:
             checks[label] = _check(
                 "SKIP",
@@ -1162,7 +1230,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     secrets: List[str] = []
     try:
         manifest = load_manifest(args.manifest)
-        for key in ("writer_url_env", "reader_url_env", "runtime_url_env", "auditor_url_env"):
+        for key in (
+            "writer_url_env",
+            "reader_url_env",
+            "runtime_url_env",
+            "auditor_url_env",
+            "evidence_writer_url_env",
+            "memory_curator_url_env",
+        ):
             env_name = manifest["target"].get(key)
             if env_name and os.environ.get(str(env_name)):
                 secrets.append(os.environ[str(env_name)])

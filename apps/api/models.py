@@ -457,6 +457,28 @@ class MemorySignals(StrictModel):
         return value
 
 
+class MemoryCandidate(StrictModel):
+    id: str
+    task_id: str
+    generation: str
+    memory_type: Literal["semantic", "episodic", "procedural"]
+    statement: str
+    component: str
+    evidence_digest: str
+    review_id: str
+    proposed_by: str = "memory-agent"
+    status: Literal["candidate"] = "candidate"
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("evidence_digest")
+    @classmethod
+    def evidence_digest_is_sha256(cls, value: str) -> str:
+        value = value.lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("evidence_digest must be a SHA-256 digest")
+        return value
+
+
 class MemoryRecord(StrictModel):
     id: str
     task_id: str
@@ -467,6 +489,8 @@ class MemoryRecord(StrictModel):
     evidence_digest: str
     review_id: str
     validated: bool
+    candidate_id: Optional[str] = None
+    validated_by: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("evidence_digest")

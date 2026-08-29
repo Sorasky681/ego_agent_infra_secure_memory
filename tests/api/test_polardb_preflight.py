@@ -5,8 +5,10 @@ import pytest
 
 from apps.api.polardb_preflight import (
     DISPOSABLE_MARKER,
+    EXPECTED_TRIGGER_FUNCTIONS,
     EXPECTED_TABLES,
     EXPECTED_TRIGGERS,
+    PRIVILEGE_TABLES,
     ManifestError,
     SafetyGateError,
     _packaged_migrations,
@@ -42,7 +44,12 @@ def manifest() -> dict:
             "require_role_logins": False,
             "disposable_database_prefix": "egoagentos_acceptance_",
             "disposable_database_marker": DISPOSABLE_MARKER,
-            "roles": {"runtime": "egoagentos_runtime", "auditor": "egoagentos_auditor"},
+            "roles": {
+                "runtime": "egoagentos_runtime",
+                "auditor": "egoagentos_auditor",
+                "evidence_writer": "egoagentos_evidence_writer",
+                "memory_curator": "egoagentos_memory_curator",
+            },
             "pgvector": "optional",
         },
         "operations": {
@@ -82,21 +89,43 @@ def endpoint(label: str, *, polar: bool = True) -> dict:
 
 
 def privileges() -> dict:
-    result = {}
-    for role in ("egoagentos_runtime", "egoagentos_auditor"):
+    result: dict = {}
+    roles = (
+        "egoagentos_runtime",
+        "egoagentos_auditor",
+        "egoagentos_evidence_writer",
+        "egoagentos_memory_curator",
+    )
+    evidence_read = {"tasks", "approvals", "evidence"}
+    curator_read = {"tasks", "evidence", "memory_candidates", "memories"}
+    for role in roles:
         result[role] = {}
-        for table in EXPECTED_TABLES:
+        for table in PRIVILEGE_TABLES:
             if role == "egoagentos_runtime":
                 result[role][table] = {
                     "select": True,
-                    "insert": True,
+                    "insert": table not in {"schema_migrations"},
                     "update": table in {"tasks", "approvals"},
+                    "delete": False,
+                }
+            elif role == "egoagentos_auditor":
+                result[role][table] = {
+                    "select": True,
+                    "insert": False,
+                    "update": False,
+                    "delete": False,
+                }
+            elif role == "egoagentos_evidence_writer":
+                result[role][table] = {
+                    "select": table in evidence_read,
+                    "insert": table == "evidence",
+                    "update": False,
                     "delete": False,
                 }
             else:
                 result[role][table] = {
-                    "select": True,
-                    "insert": False,
+                    "select": table in curator_read,
+                    "insert": table == "memory_candidates",
                     "update": False,
                     "delete": False,
                 }
@@ -124,8 +153,13 @@ class FakeInspector:
     def inspect_endpoint(self, _url: str, label: str) -> dict:
         return endpoint(label, polar=self.polar)
 
-    def inspect_control_plane(self, _url: str, runtime_role: str, auditor_role: str) -> dict:
-        assert (runtime_role, auditor_role) == ("egoagentos_runtime", "egoagentos_auditor")
+    def inspect_control_plane(self, _url: str, roles: dict[str, str]) -> dict:
+        assert roles == {
+            "runtime": "egoagentos_runtime",
+            "auditor": "egoagentos_auditor",
+            "evidence_writer": "egoagentos_evidence_writer",
+            "memory_curator": "egoagentos_memory_curator",
+        }
         return {
             "tables": [
                 {"table_name": table, "relrowsecurity": True, "relforcerowsecurity": False}
@@ -135,12 +169,7 @@ class FakeInspector:
                 {
                     "trigger_name": trigger,
                     "trigger_enabled": "O" if self.triggers_enabled else "D",
-                    "function_name": {
-                        "audit_events_guard_insert": "egoagentos_guard_audit_insert",
-                        "audit_events_no_truncate": "egoagentos_reject_audit_mutation",
-                        "audit_events_no_update_or_delete": "egoagentos_reject_audit_mutation",
-                        "audit_events_stage_notify": "egoagentos_notify_stage_event",
-                    }[trigger],
+                    "function_name": EXPECTED_TRIGGER_FUNCTIONS[trigger],
                 }
                 for trigger in EXPECTED_TRIGGERS
             ],
@@ -156,13 +185,14 @@ class FakeInspector:
             ],
             "migrations": [
                 {
-                    "version": "001_control_plane.sql",
-                    "sha256": _packaged_migrations()["001_control_plane.sql"]
+                    "version": version,
+                    "sha256": digest
                     if self.migration_matches
                     else "a" * 64,
                 }
+                for version, digest in _packaged_migrations().items()
             ],
-            "roles": [runtime_role, auditor_role],
+            "roles": list(roles.values()),
             "privileges": privileges(),
         }
 
@@ -264,7 +294,7 @@ def test_packaged_migration_digest_mismatch_is_a_required_failure() -> None:
     )
     schema = report["checks"]["control_plane"]["schema"]
     assert schema["status"] == "FAIL"
-    assert schema["evidence"]["mismatched_migrations"] == ["001_control_plane.sql"]
+    assert schema["evidence"]["mismatched_migrations"] == sorted(_packaged_migrations())
     assert report["summary"]["status"] == "FAIL"
 
 

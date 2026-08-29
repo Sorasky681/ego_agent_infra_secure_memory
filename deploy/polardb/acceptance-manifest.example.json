@@ -8,6 +8,8 @@
     "reader_url_env": "EGO_POLARDB_READER_URL",
     "runtime_url_env": "EGO_POLARDB_RUNTIME_URL",
     "auditor_url_env": "EGO_POLARDB_AUDITOR_URL",
+    "evidence_writer_url_env": "EGO_POLARDB_EVIDENCE_WRITER_URL",
+    "memory_curator_url_env": "EGO_POLARDB_MEMORY_CURATOR_URL",
     "minimum_server_version_num": 120000,
     "require_tls": true,
     "require_polardb_marker": true,
@@ -19,7 +21,9 @@
     "disposable_database_marker": "EGOAGENTOS_DISPOSABLE_DATABASE_V1",
     "roles": {
       "runtime": "egoagentos_runtime",
-      "auditor": "egoagentos_auditor"
+      "auditor": "egoagentos_auditor",
+      "evidence_writer": "egoagentos_evidence_writer",
+      "memory_curator": "egoagentos_memory_curator"
     },
     "pgvector": "optional"
   },

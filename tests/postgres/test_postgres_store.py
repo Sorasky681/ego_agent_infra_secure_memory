@@ -8,6 +8,7 @@ from typing import Any, Callable
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import sql
 
 from apps.api.errors import ConflictError, ControlPlaneError
 from apps.api.event_stream import iter_task_events
@@ -298,7 +299,10 @@ def test_migrations_replay_cleanly_and_idempotent_requests_execute_once(postgres
         migrations = connection.execute(
             "SELECT version, sha256 FROM schema_migrations ORDER BY version"
         ).fetchall()
-    assert [row["version"] for row in migrations] == ["001_control_plane.sql"]
+    assert [row["version"] for row in migrations] == [
+        "001_control_plane.sql",
+        "002_ledger_boundaries.sql",
+    ]
     assert all(len(row["sha256"]) == 64 for row in migrations)
 
     first_app = create_app(database_url=postgres_url)
@@ -354,10 +358,25 @@ def test_security_roles_are_least_privilege_and_rls_scopes_tenants(postgres_url:
               has_table_privilege('egoagentos_runtime', 'audit_events', 'UPDATE') AS can_update,
               has_table_privilege('egoagentos_runtime', 'tasks', 'DELETE') AS can_delete_task,
               has_table_privilege('egoagentos_auditor', 'tasks', 'SELECT') AS auditor_read,
-              has_table_privilege('egoagentos_auditor', 'tasks', 'INSERT') AS auditor_insert
+              has_table_privilege('egoagentos_auditor', 'tasks', 'INSERT') AS auditor_insert,
+              has_table_privilege('egoagentos_evidence_writer', 'evidence', 'INSERT') AS evidence_insert,
+              has_table_privilege('egoagentos_evidence_writer', 'memories', 'INSERT') AS evidence_memory_insert,
+              has_table_privilege('egoagentos_memory_curator', 'memory_candidates', 'INSERT') AS curator_candidate_insert,
+              has_table_privilege('egoagentos_memory_curator', 'memories', 'INSERT') AS curator_memory_insert
             """
         ).fetchone()
-        assert privileges == (True, True, False, False, True, False)
+        assert privileges == (
+            True,
+            True,
+            False,
+            False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+        )
 
         connection.execute(
             """
@@ -392,6 +411,82 @@ def test_security_roles_are_least_privilege_and_rls_scopes_tenants(postgres_url:
             """,
             (predecessor[0], "3" * 64, DEMO_TASK_ID),
         )
+
+    with psycopg.connect(postgres_url) as connection:
+        connection.execute("SET ROLE egoagentos_memory_curator")
+        connection.execute("SELECT set_config('egoagentos.tenant_id', 'local', true)")
+        connection.execute(
+            """
+            INSERT INTO memory_candidates(
+                id, tenant_id, task_id, generation, evidence_digest, review_id,
+                record_json, created_at
+            )
+            SELECT 'memcand_role_probe', tenant_id, id, generation, %s,
+                   'review_role_probe', '{}'::jsonb, now()
+              FROM tasks WHERE id=%s
+            """,
+            ("4" * 64, DEMO_TASK_ID),
+        )
+
+    with psycopg.connect(postgres_url) as connection:
+        connection.execute("SET ROLE egoagentos_memory_curator")
+        connection.execute("SELECT set_config('egoagentos.tenant_id', 'local', true)")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            connection.execute(
+                """
+                INSERT INTO memories(
+                    id, tenant_id, task_id, generation, validated, record_json, created_at
+                ) VALUES ('mem_forbidden', 'local', %s, 'generation', true, '{}'::jsonb, now())
+                """,
+                (DEMO_TASK_ID,),
+            )
+
+
+def test_restricted_runtime_starts_in_verify_only_migration_mode(postgres_url: str) -> None:
+    PostgresStore(postgres_url)
+    security_sql = (
+        Path(__file__).resolve().parents[2] / "deploy/postgres/security_roles.sql"
+    ).read_text(encoding="utf-8")
+    with psycopg.connect(postgres_url) as connection:
+        connection.execute(security_sql)
+
+    separator = "&" if "?" in postgres_url else "?"
+    runtime_url = "%s%soptions=-c%%20role%%3Degoagentos_runtime" % (
+        postgres_url,
+        separator,
+    )
+    runtime = PostgresStore(runtime_url, migration_mode="verify")
+    assert runtime.ping() is True
+    with psycopg.connect(runtime_url) as connection:
+        privileges = connection.execute(
+            "SELECT has_schema_privilege(current_user, 'public', 'CREATE')"
+        ).fetchone()
+    assert privileges == (False,)
+
+
+@pytest.mark.parametrize("table", ["evidence", "memory_candidates", "memories"])
+def test_evidence_and_memory_ledgers_reject_mutation_at_database_layer(
+    postgres_url: str, table: str
+) -> None:
+    store = PostgresStore(postgres_url)
+    service = ResearchOpsService(store)
+    service.reset_demo("happy_path")
+    paused = service.autorun(DEMO_TASK_ID)
+    pending = paused["task"]["pending_approval"]
+    decision = service.decide_approval(
+        pending["id"], "approved", "ledger-trigger-test", pending["action_digest"]
+    )
+    service.autorun(DEMO_TASK_ID, approval_token=decision["approval_token"])
+
+    with psycopg.connect(postgres_url) as connection:
+        with pytest.raises(psycopg.errors.IntegrityConstraintViolation, match="append-only"):
+            connection.execute(
+                sql.SQL("UPDATE {} SET created_at=created_at").format(sql.Identifier(table))
+            )
+
+    with psycopg.connect(postgres_url) as connection:
+        with pytest.raises(psycopg.errors.IntegrityConstraintViolation, match="append-only"):
+            connection.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(table)))
 
 
 def test_migration_checksum_drift_fails_closed(postgres_url: str) -> None:
