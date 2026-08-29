@@ -147,6 +147,34 @@ uv run --python 3.12 --project mcp_servers pytest mcp_servers/tests
 
 API 与 GPU MCP 共享 [`contracts/approval-token-v1.json`](contracts/approval-token-v1.json)。设置同一个至少 32 字节的 `EGO_MCP_APPROVAL_HMAC_SECRET` 后，API 审批会签发 MCP 可独立验签、限时且单次消费的 `egoap1` token；跨 Python 3.9/3.12 集成测试覆盖 dry-run 摘要一致、一次受控 synthetic launch 与 replay 拒绝。默认留空时，Web 使用 `egoap_` 会话 token 完成本地控制面 replay，但该 token 不具备 MCP 互操作性。
 
+## RXP/1：可复现实验承诺与验收协议
+
+[`RXP — Reproducible eXperiment Protocol`](docs/protocols/RXP.md) 把一次实验从
+“日志记录”收紧为可执行因果合同：先冻结完整 `MatrixPlan`，再为每个 cell 依次
+提交 `Intent → 单次/限 scope/限资源/限时 Grant → Receipt → 原始 Evidence →
+独立 Decision`。`MatrixLedger` 同时给出 evidence Merkle root、追加式 ledger root
+和 `missing_decisions`，因此不能只 cherry-pick 有利 cell 后声称矩阵完整。
+
+RXP 不替代 MCP、A2A/AgentTeams、Skill、W3C PROV-O 或 MLflow：这些系统可以
+承载、生成、映射或存储 RXP 文档；RXP 只负责实验承诺与验收的不变量。当前实现是
+独立可运行 reference package/CLI，尚未接入现有 FastAPI 持久化路径；现有 API 与
+GPU MCP 仍使用 `approval-token-v1`。仓库提供一个显式的一次性迁移 adapter，只有
+旧 token 已被验证并消费后才会重新签发 RXP Grant。
+
+```bash
+python -m protocols.rxp demo -o /tmp/rxp-a.json
+python -m protocols.rxp demo -o /tmp/rxp-b.json
+cmp /tmp/rxp-a.json /tmp/rxp-b.json
+python -m protocols.rxp verify /tmp/rxp-a.json --demo-key
+python -m protocols.rxp schema --check
+```
+
+四级 determinism 是证据强度而非性能宣传：`D0_UNVERIFIED`、
+`D1_INPUTS_BOUND`、`D2_SEEDED_ENV_BOUND`、`D3_BYTE_REPLAY_VERIFIED`。随仓库的
+synthetic fixture 对纯 canonical transform 达到 D3；这不代表任意 GPU 训练可
+byte-identical。稳定 Python API、Schema、状态机、安全边界与可选 PROV-O 映射见
+[完整规范](docs/protocols/RXP.md)，并由 `tests/protocols/` 覆盖。
+
 ## Evidence Gate 与安全不变量
 
 Decision 前必须具备且校验七类证据：`code`、`config`、`dataset_manifest`、`log`、`metric`、`trace`、`review`。Reviewer 必须独立；LLM summary 不能代替 raw metric artifact。
@@ -193,12 +221,13 @@ make package
 ```text
 apps/api/                 FastAPI + SQLite deterministic control plane
 apps/web/                 React Research Cockpit
+protocols/rxp/            RXP/1 models, schemas, grants, ledger, CLI
 agents/                   7 Agent identity contracts
 skills/                   6 reusable Skill packages
 mcp_servers/              4 MCPServer processes / 7 tools
 integrations/             AgentTeams, Higress, Nacos, Aliyun adapter contracts
 examples/egolite/         explicitly synthetic fixtures and experiment plan
-tests/                    backend domain/API tests
+tests/                    backend domain/API, integration, and RXP conformance tests
 docs/                     architecture, security, evaluation, trace, claims
 submission/               ≤500 字简介、答辩稿、演示与提交清单
 ```

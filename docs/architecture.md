@@ -12,15 +12,36 @@ flowchart TB
   R --> FX["Explicitly synthetic EgoLite fixtures"]
   API --> DB["Authoritative store\nSQLite local · PostgreSQL/PolarDB profile"]
   API --> AU["Evidence + immutable audit chain"]
+  RXP["RXP/1 executable protocol\nIntent · Grant · Receipt · Evidence · Decision"]
+  RXP --> RL["Canonical MatrixLedger\nMerkle evidence · missing-cell proof"]
+  API -. "adapter boundary; not wired yet" .-> RXP
   SK["6 versioned Skill contracts"] -. "workflow contract" .-> R
   MCP["4 independently runnable MCP servers"] -. "execution-profile bridge" .-> API
+  MCP -. "may carry RXP documents" .-> RXP
   AT["AgentTeams / Matrix deployment contract"] -. "Manager–Worker envelopes" .-> R
+  AT -. "may carry RXP digests" .-> RXP
   HG["Higress route policy"] -. "not deployed" .-> MCP
   NC["Nacos publish policy"] -. "not deployed" .-> SK
 ```
 
 Solid arrows are the shipped local runtime. Dashed arrows are integration contracts or
 an optional execution profile; they are not evidence that an external service is live.
+
+## RXP/1 experiment acceptance plane
+
+[`RXP/1`](protocols/RXP.md) is a shipped, executable, transport-independent reference
+protocol. It freezes a complete experiment matrix and enforces, per cell, the causal
+chain `Intent → one-time Grant → Receipt → Evidence → independent Decision`. Its
+`MatrixLedger` commits evidence with a Merkle root, extends an append-only event root,
+and lists every expected cell without a Decision. It does not replace MCP tool access,
+Agent communication, Skill instructions, PROV-O, or experiment trackers.
+
+The current FastAPI judge replay continues to use `approval-token-v1`; it is **not yet
+wired to persist RXP documents**. Integration is explicit: an orchestrator creates RXP
+documents around an execution adapter, transports their canonical JSON over MCP/A2A or
+files, stores artifact bytes by digest, and checkpoints ledger roots in an authoritative
+store. A one-way adapter can migrate an already validated-and-consumed `egoap1` token
+into a fresh RXP Grant without treating the two formats as wire-compatible.
 
 ## Deterministic core, model residual
 

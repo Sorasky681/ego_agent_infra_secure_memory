@@ -21,6 +21,7 @@ DEFAULT_DIRS = (
     "examples",
     "integrations",
     "mcp_servers",
+    "protocols",
     "scripts",
     "skills",
     "submission",

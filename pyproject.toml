@@ -23,18 +23,20 @@ dev = [
 
 [project.scripts]
 rxp-bench = "benchmarks.runner:main"
+rxp = "protocols.rxp.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["apps.api*", "benchmarks*"]
+include = ["apps.api*", "benchmarks*", "protocols*"]
 namespaces = true
 
 [tool.setuptools.package-data]
 "apps.api" = ["fixtures/*.yaml"]
 "benchmarks" = ["corpus/v1/*.json"]
+"protocols.rxp" = ["schemas/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests/api", "tests/benchmarks"]
+testpaths = ["tests/api", "tests/benchmarks", "tests/protocols"]
 pythonpath = ["."]
 
 [tool.ruff]

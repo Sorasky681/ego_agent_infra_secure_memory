@@ -12,6 +12,9 @@ evidence URI is produced by the current repository and replayed successfully.
 | MCP path/shell/approval boundaries | verified locally | 21 MCP tests + Ruff; descriptor-relative no-follow scans; four servers and seven typed tools |
 | Streamable HTTP MCP transport | verified on loopback | automated initialize + `tools/list` test for repo server; stdio remains default |
 | API approval is accepted once by GPU MCP | verified as a cross-runtime contract test | shared `egoap1` HMAC contract; exact dry-run digest/scope; one fake-runner launch; replay rejected |
+| RXP/1 canonical experiment-acceptance protocol is executable | verified locally against synthetic fixtures | 26 protocol tests; committed schemas; byte-identical CLI replay; canonical/Merkle known vectors |
+| RXP detects omitted matrix decisions and rejects scope/expiry/replay/tampering | verified in the reference implementation | Cartesian-plan validation, `missing_decisions`, concurrent SQLite replay test, causal/root mutation tests |
+| RXP is persisted by the FastAPI control plane or a distributed transparency service | not claimed | API adapter, durable document/artifact store, serializable distributed replay registry, externally checkpointed root required |
 | Web cockpit reflects backend gate truth | verified locally | 9 component/normalization/static-replay tests + production build + completed/approval/mobile screenshots |
 | API invokes MCP over HTTP in the default Web replay | not claimed | network client call trace + correlated tool artifact required |
 | CPU hashing recovery branch works | synthetic control-flow fixture only | before/after fixture + trace sequence; requires physical-run evidence for a performance claim |

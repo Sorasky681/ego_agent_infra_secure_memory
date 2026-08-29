@@ -39,11 +39,19 @@ jobs:
       - name: Test API
         run: uv run --python 3.9 --extra dev --locked pytest tests/api
 
-      - name: Lint API
-        run: uv run --python 3.9 --extra dev --locked ruff check apps/api tests/api
+      - name: Test RXP protocol
+        run: uv run --python 3.9 --extra dev --locked pytest tests/protocols
 
-      - name: Type-check API
-        run: uv run --python 3.9 --extra dev --locked mypy apps/api
+      - name: Check RXP schemas
+        run: uv run --python 3.9 --extra dev --locked python -m protocols.rxp schema --check
+
+      - name: Lint API and RXP
+        run: >-
+          uv run --python 3.9 --extra dev --locked
+          ruff check apps/api protocols/rxp tests/api tests/protocols
+
+      - name: Type-check API and RXP
+        run: uv run --python 3.9 --extra dev --locked mypy apps/api protocols/rxp
 
   mcp:
     name: MCP (Python 3.12)
