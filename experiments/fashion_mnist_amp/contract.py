@@ -278,7 +278,7 @@ def evaluate_raw_result(
 
     _require(raw.get("schema") == RAW_SCHEMA, "unsupported raw-result schema")
     _require(raw.get("execution_mode") == "real_cuda", "execution_mode is not real_cuda")
-    _require(raw.get("synthetic") is False, "synthetic evidence cannot pass the live gate")
+    _require(raw.get("synthetic") is False, "synthetic evidence cannot pass the contract gate")
     _require(raw.get("physical_launch_count") == 1, "exactly one physical launch is required")
     _require(raw.get("cpu_fallback_used") is False, "CPU fallback invalidates live evidence")
 
@@ -302,6 +302,44 @@ def evaluate_raw_result(
         "trained_model_sha256",
     ):
         _require(_is_sha256(raw.get(digest_name)), f"{digest_name} is invalid")
+    binding_artifacts = raw.get("binding_artifacts")
+    _require(isinstance(binding_artifacts, dict), "binding_artifacts are missing")
+    binding_artifacts = cast(Dict[str, Any], binding_artifacts)
+    expected_bindings = {
+        "environment_lock": "environment_lock_sha256",
+        "approval_receipt": "approval_receipt_sha256",
+        "agentteams_receipt": "agentteams_receipt_sha256",
+        "matrix_plan": "matrix_plan_sha256",
+    }
+    _require(set(binding_artifacts) == set(expected_bindings), "binding_artifacts mismatch")
+    for binding_name, digest_name in expected_bindings.items():
+        binding = binding_artifacts.get(binding_name)
+        _require(isinstance(binding, dict), f"binding_artifacts.{binding_name} is invalid")
+        binding = cast(Dict[str, Any], binding)
+        _require(
+            set(binding) == {"basename", "bytes", "sha256"},
+            f"binding_artifacts.{binding_name} fields mismatch",
+        )
+        basename = binding.get("basename")
+        _require(
+            isinstance(basename, str)
+            and bool(basename)
+            and basename not in {".", ".."}
+            and "/" not in basename
+            and "\\" not in basename,
+            f"binding_artifacts.{binding_name}.basename is invalid",
+        )
+        byte_count = binding.get("bytes")
+        _require(
+            isinstance(byte_count, int)
+            and not isinstance(byte_count, bool)
+            and 1 <= byte_count <= 16 * 1024 * 1024,
+            f"binding_artifacts.{binding_name}.bytes is invalid",
+        )
+        _require(
+            binding.get("sha256") == raw[digest_name],
+            f"binding_artifacts.{binding_name} digest mismatch",
+        )
     git_commit = raw.get("git_commit")
     _require(
         isinstance(git_commit, str)
@@ -408,9 +446,13 @@ def evaluate_raw_result(
     return {
         "schema": DECISION_SCHEMA,
         "decision": decision,
-        "gate_status": "PASS",
-        "execution_mode": "real_cuda",
-        "synthetic": False,
+        "contract_gate_status": "PASS",
+        "verification_status": "CONTRACT_PASS_ORIGIN_UNVERIFIED",
+        "external_origin_status": "UNVERIFIED",
+        "live_claim_allowed": False,
+        "verification_scope": "deterministic_recomputation_of_supplied_bytes",
+        "claimed_execution_mode": "real_cuda",
+        "synthetic_declared": False,
         "sample_count": count,
         "baseline_accuracy": baseline_accuracy,
         "candidate_accuracy": candidate_accuracy,

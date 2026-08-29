@@ -21,7 +21,10 @@ def test_build_is_deterministic_and_offline_replayable(
     assert built_a["bundle_root"] == built_b["bundle_root"]
     assert (first / "manifest.json").read_bytes() == (second / "manifest.json").read_bytes()
     verified = verify_bundle(first)
-    assert verified["status"] == "PASS"
+    assert verified["status"] == "CONTRACT_PASS_ORIGIN_UNVERIFIED"
+    assert verified["contract_status"] == "PASS"
+    assert verified["external_origin_status"] == "UNVERIFIED"
+    assert verified["live_claim_allowed"] is False
     assert verified["mvp_coverage"] == "8/14"
     assert verified["full_release_status"] == "NOT_EVALUATED"
     assert verified["external_calls"] == 0
@@ -127,3 +130,59 @@ def test_undeclared_bundle_file_is_rejected(acceptance_source: Path, tmp_path: P
     extra.write_text("not in the manifest", encoding="utf-8")
     with pytest.raises(AcceptanceError, match="undeclared artifacts"):
         verify_bundle(bundle)
+
+
+def test_operator_assertion_cannot_promote_external_origin(tmp_path: Path) -> None:
+    source = build_acceptance_source(tmp_path / "source")
+    descriptor_path = source / "acceptance-input.json"
+    descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    descriptor["truth_boundary"]["external_origin_authentication"] = "VERIFIED"
+    descriptor_path.write_text(json.dumps(descriptor) + "\n", encoding="utf-8")
+    with pytest.raises(AcceptanceError, match="UNVERIFIED_OPERATOR_ASSERTION"):
+        build_bundle(source, tmp_path / "bundle")
+
+
+def test_reused_agentteams_raw_response_is_rejected(tmp_path: Path) -> None:
+    source = build_acceptance_source(tmp_path / "source")
+    receipts_path = source / "agentteams/receipts.json"
+    document = json.loads(receipts_path.read_text(encoding="utf-8"))
+    first, second = document["receipts"][:2]
+    second["raw_file"] = first["raw_file"]
+    second["raw_sha256"] = first["raw_sha256"]
+    receipts_path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    with pytest.raises(AcceptanceError, match="unique raw response bytes"):
+        build_bundle(source, tmp_path / "bundle")
+
+
+def test_untyped_matrix_content_is_rejected(tmp_path: Path) -> None:
+    source = build_acceptance_source(tmp_path / "source")
+    matrix_path = source / "agentteams/matrix-events.jsonl"
+    records = [json.loads(line) for line in matrix_path.read_text(encoding="utf-8").splitlines()]
+    records[0]["content"] = {}
+    matrix_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    with pytest.raises(AcceptanceError, match="typed trace binding"):
+        build_bundle(source, tmp_path / "bundle")
+
+
+def test_decision_must_equal_recomputed_raw_metric_policy(tmp_path: Path) -> None:
+    source = build_acceptance_source(tmp_path / "source")
+    decision_path = source / "decision/decision.json"
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    decision["verdict"] = "REJECT"
+    decision_path.write_text(json.dumps(decision) + "\n", encoding="utf-8")
+    with pytest.raises(AcceptanceError, match="recomputed raw metrics"):
+        build_bundle(source, tmp_path / "bundle")
+
+
+def test_negative_gpu_telemetry_is_rejected(tmp_path: Path) -> None:
+    source = build_acceptance_source(tmp_path / "source")
+    gpu_path = source / "runtime/gpu-metrics.jsonl"
+    records = [json.loads(line) for line in gpu_path.read_text(encoding="utf-8").splitlines()]
+    records[0]["power_w"] = -1
+    gpu_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    with pytest.raises(AcceptanceError, match="power_w must be non-negative"):
+        build_bundle(source, tmp_path / "bundle")

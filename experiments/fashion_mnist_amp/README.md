@@ -41,17 +41,21 @@ CUDA_VISIBLE_DEVICES=0 python -m experiments.fashion_mnist_amp.run \
   --git-commit "$(git rev-parse HEAD)" \
   --run-id "$RUN_ID" \
   --physical-launch-id "$PHYSICAL_LAUNCH_ID" \
-  --environment-lock-sha256 "$ENVIRONMENT_LOCK_SHA256" \
-  --approval-receipt-sha256 "$APPROVAL_RECEIPT_SHA256" \
-  --agentteams-receipt-sha256 "$AGENTTEAMS_RECEIPT_SHA256" \
-  --matrix-plan-sha256 "$MATRIX_PLAN_SHA256"
+  --environment-lock-file /absolute/environment.lock \
+  --approval-receipt-file /absolute/approval-receipt.json \
+  --agentteams-receipt-file /absolute/agentteams-receipt.json \
+  --matrix-plan-file /absolute/matrix-plan.json
 ```
 
 No live artifact is committed yet. The presence of this adapter proves only that the
 repository is ready to execute the bounded workload once an official worker and CUDA
 runner are available.
 
-Anyone can recompute the Evidence Gate and Decision without CUDA or Torch:
+Anyone can recompute the contract gate and Decision without CUDA or Torch. This
+proves deterministic self-consistency of the supplied bytes only: the verifier
+always reports `CONTRACT_PASS_ORIGIN_UNVERIFIED` and
+`live_claim_allowed=false`. A successful exit does not authenticate CUDA,
+AgentTeams, or an external scheduler as the byte source:
 
 ```bash
 python -m experiments.fashion_mnist_amp.verify \

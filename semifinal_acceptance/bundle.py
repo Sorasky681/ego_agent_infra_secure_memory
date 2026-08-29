@@ -15,7 +15,7 @@ import shutil
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, cast
 
 from benchmarks.model import canonical_json, load_corpus
 from benchmarks.trace_verifier import TraceValidationError, verify_trace_bytes
@@ -61,6 +61,7 @@ REQUIRED_FILE_KEYS: Tuple[str, ...] = (
     "rxp_ledger",
     "evidence_gate",
     "failure_recovery",
+    "checkpoint",
     "review",
     "decision",
 )
@@ -111,6 +112,7 @@ class AcceptanceError(ValueError):
 class _SourceReport:
     descriptor: Dict[str, Any]
     trace_root: str
+    matrix_events_root: str
     evidence_root: str
     benchmark_evidence_root: str
     rxp_ledger_root: str
@@ -212,6 +214,29 @@ def _domain_digest(domain: str, value: Any) -> str:
     return _digest_bytes(domain.encode("utf-8") + b"\0" + canonical_bytes(value))
 
 
+def decision_policy_digest(policy: Mapping[str, Any]) -> str:
+    """Commit the deterministic verdict rule under a dedicated domain."""
+
+    return _domain_digest("EgoAgentOS/semifinal-decision-policy/v1", policy)
+
+
+def matrix_events_digest(records: Sequence[Mapping[str, Any]]) -> str:
+    """Commit the ordered raw Matrix capture under a dedicated domain."""
+
+    return _domain_digest("EgoAgentOS/matrix-events/v1", list(records))
+
+
+def _fraction(value: Any, label: str, *, nonnegative: bool = False) -> Fraction:
+    text = _text(value, label)
+    try:
+        result = Fraction(text)
+    except (ValueError, ZeroDivisionError) as error:
+        raise AcceptanceError("%s must be an exact rational" % label) from error
+    if nonnegative and result < 0:
+        raise AcceptanceError("%s must be non-negative" % label)
+    return result
+
+
 def _safe_relative(value: Any, label: str) -> Path:
     text = _text(value, label)
     relative = Path(text)
@@ -294,7 +319,10 @@ def _validate_descriptor(root: Path) -> Tuple[Dict[str, Any], Dict[str, Path]]:
         raise AcceptanceError("truth_boundary.synthetic must be false")
     if truth.get("gpu_execution") != "real":
         raise AcceptanceError("truth_boundary.gpu_execution must be real")
-    _text(truth.get("external_origin_authentication"), "external_origin_authentication")
+    if truth.get("external_origin_authentication") != "UNVERIFIED_OPERATOR_ASSERTION":
+        raise AcceptanceError(
+            "v1 accepts only UNVERIFIED_OPERATOR_ASSERTION; content hashes cannot authenticate origin"
+        )
 
     run = _object(descriptor.get("run"), "run")
     if run.get("primary_scenario_id") != "worker_timeout_reassign":
@@ -311,7 +339,7 @@ def _validate_descriptor(root: Path) -> Tuple[Dict[str, Any], Dict[str, Path]]:
         "corpus_digest": corpus.digest,
         "total_scenarios": len(corpus.scenarios),
         "mvp_scenarios": list(MVP_SCENARIOS),
-        "mvp_status": "PASS",
+        "mvp_contract_status": "PASS",
         "full_release_status": "NOT_EVALUATED",
     }
     mismatched = [key for key, value in expected.items() if corpus_input.get(key) != value]
@@ -368,6 +396,29 @@ def _validate_frozen_inputs(path: Path) -> Dict[str, Any]:
     if len(filters) != len(set(filters)):
         raise AcceptanceError("declared_filters contains duplicates")
 
+    policy = _object(metric.get("decision_policy"), "metric_contract.decision_policy")
+    kind = policy.get("kind")
+    for key in ("pass_rationale_code", "fail_rationale_code"):
+        rationale = _text(policy.get(key), "decision_policy.%s" % key)
+        if re.fullmatch(r"^[A-Z][A-Z0-9_]{1,63}$", rationale) is None:
+            raise AcceptanceError("decision_policy.%s is not a rationale code" % key)
+    if kind == "minimum_mean":
+        if policy.get("cell_id") not in cell_ids:
+            raise AcceptanceError("minimum_mean policy names an unknown cell")
+        _fraction(policy.get("minimum_scaled_fraction"), "minimum_scaled_fraction")
+    elif kind == "candidate_noninferiority":
+        baseline = policy.get("baseline_cell_id")
+        candidate = policy.get("candidate_cell_id")
+        if baseline not in cell_ids or candidate not in cell_ids or baseline == candidate:
+            raise AcceptanceError("candidate_noninferiority policy cell ids are invalid")
+        _fraction(
+            policy.get("max_degradation_scaled_fraction"),
+            "max_degradation_scaled_fraction",
+            nonnegative=True,
+        )
+    else:
+        raise AcceptanceError("unsupported deterministic decision policy")
+
     budget = _object(value.get("budget"), "budget")
     if _integer(budget.get("max_gpu_count"), "budget.max_gpu_count", 1) != 1:
         raise AcceptanceError("the bounded semifinal profile requires exactly one GPU")
@@ -398,6 +449,10 @@ def _validate_agentteams_receipts(
         raise AcceptanceError("AgentTeams receipts must be non-empty")
     by_id: Dict[str, Dict[str, Any]] = {}
     kinds_by_scenario: Dict[str, Set[str]] = {}
+    raw_paths: Set[str] = set()
+    raw_digests: Set[str] = set()
+    request_ids: Set[str] = set()
+    response_ids: Set[str] = set()
     for receipt in receipts:
         receipt_id = _text(receipt.get("receipt_id"), "receipt_id")
         if receipt_id in by_id:
@@ -413,13 +468,58 @@ def _validate_agentteams_receipts(
             raise AcceptanceError("AgentTeams receipt project_id mismatch")
         if receipt.get("task_id") != trace["task_id"] or receipt.get("correlation_id") != trace["correlation_id"]:
             raise AcceptanceError("AgentTeams receipt task/correlation mismatch")
-        _text(receipt.get("endpoint"), "receipt.endpoint")
+        method = _text(receipt.get("method"), "receipt.method")
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            raise AcceptanceError("receipt.method is not allowlisted")
+        endpoint = _text(receipt.get("endpoint"), "receipt.endpoint")
+        if not endpoint.startswith("/") or ".." in endpoint:
+            raise AcceptanceError("receipt.endpoint must be an absolute API path")
+        request_id = _text(receipt.get("request_id"), "receipt.request_id")
+        response_id = _text(receipt.get("response_id"), "receipt.response_id")
+        captured_at = _text(receipt.get("captured_at"), "receipt.captured_at")
+        if request_id in request_ids or response_id in response_ids:
+            raise AcceptanceError("AgentTeams request/response identifiers must be unique")
+        request_ids.add(request_id)
+        response_ids.add(response_id)
         status = _integer(receipt.get("status_code"), "receipt.status_code", 100)
         if status < 200 or status >= 300:
             raise AcceptanceError("official AgentTeams receipt is not a successful response")
         raw_file = _source_file(root, receipt.get("raw_file"), "receipt.raw_file")
-        if _digest_bytes(raw_file.read_bytes()) != _sha256(receipt.get("raw_sha256"), "receipt.raw_sha256"):
+        raw_relative = raw_file.relative_to(root).as_posix()
+        raw_sha256 = _sha256(receipt.get("raw_sha256"), "receipt.raw_sha256")
+        if raw_relative in raw_paths or raw_sha256 in raw_digests:
+            raise AcceptanceError("each AgentTeams receipt must use unique raw response bytes")
+        raw_paths.add(raw_relative)
+        raw_digests.add(raw_sha256)
+        raw_bytes = raw_file.read_bytes()
+        if _digest_bytes(raw_bytes) != raw_sha256:
             raise AcceptanceError("AgentTeams raw response digest mismatch for %s" % receipt_id)
+        raw = _object(_parse_json_bytes(raw_bytes, raw_relative), "raw AgentTeams response")
+        expected_raw = {
+            "schema_version": "egoagentos.agentteams-http-response/v1",
+            "scenario_id": scenario_id,
+            "kind": kind,
+            "request_id": request_id,
+            "response_id": response_id,
+            "project_id": trace["project_id"],
+            "task_id": trace["task_id"],
+            "correlation_id": trace["correlation_id"],
+            "method": method,
+            "endpoint": endpoint,
+            "status_code": status,
+            "captured_at": captured_at,
+        }
+        mismatched_raw = [
+            key for key, expected in expected_raw.items() if raw.get(key) != expected
+        ]
+        if mismatched_raw:
+            raise AcceptanceError(
+                "AgentTeams raw response/index mismatch for %s: %s"
+                % (receipt_id, ", ".join(mismatched_raw))
+            )
+        body = _object(raw.get("body"), "raw AgentTeams response body")
+        if body.get("ok") is not True:
+            raise AcceptanceError("raw AgentTeams response body is not successful")
         by_id[receipt_id] = receipt
         kinds_by_scenario.setdefault(scenario_id, set()).add(kind)
     for scenario_id in MVP_SCENARIOS:
@@ -439,11 +539,14 @@ def _validate_agentteams_receipts(
 
 def _validate_matrix_events(
     path: Path, traces: Mapping[str, Mapping[str, Any]]
-) -> None:
+) -> Dict[str, Any]:
     records = _load_jsonl(path, "Matrix raw events")
     ids: Set[str] = set()
     kinds_by_scenario: Dict[str, Set[str]] = {}
     sequences_by_scenario: Dict[str, List[int]] = {}
+    timestamps_by_scenario: Dict[str, List[int]] = {}
+    rooms_by_scenario: Dict[str, Set[str]] = {}
+    primary_recovery: Optional[Dict[str, Any]] = None
     for record in records:
         event_id = _text(record.get("event_id"), "Matrix event_id")
         if event_id in ids:
@@ -462,16 +565,96 @@ def _validate_matrix_events(
             raise AcceptanceError("Matrix event project/task mismatch")
         if record.get("correlation_id") != trace["correlation_id"]:
             raise AcceptanceError("Matrix event correlation mismatch")
-        _text(record.get("room_id"), "Matrix room_id")
-        _text(record.get("sender"), "Matrix sender")
-        _integer(record.get("origin_server_ts"), "Matrix origin_server_ts", 0)
-        _object(record.get("content"), "Matrix content")
+        room_id = _text(record.get("room_id"), "Matrix room_id")
+        rooms_by_scenario.setdefault(scenario_id, set()).add(room_id)
+        sender = _text(record.get("sender"), "Matrix sender")
+        timestamp = _integer(record.get("origin_server_ts"), "Matrix origin_server_ts", 1)
+        timestamps_by_scenario.setdefault(scenario_id, []).append(timestamp)
+        content = _object(record.get("content"), "Matrix content")
+        trace_rxp = _object(trace.get("rxp"), "trace RXP")
+        common = {
+            "event_type": event_type,
+            "scenario_id": scenario_id,
+            "task_id": trace["task_id"],
+            "correlation_id": trace["correlation_id"],
+            "matrix_root": trace_rxp["matrix_root"],
+        }
+        expected = dict(common)
+        if event_type == "TASK_REQUEST":
+            if not sender.startswith("@bridge"):
+                raise AcceptanceError("TASK_REQUEST must be sent by the bridge principal")
+            expected["intent_digest"] = trace_rxp["intent_digest"]
+        elif event_type == "APPROVAL_GRANTED":
+            if not sender.startswith("@human-"):
+                raise AcceptanceError("APPROVAL_GRANTED must be sent by the human principal")
+            approval_event_id = _object(
+                trace.get("official_response_identifiers"),
+                "official_response_identifiers",
+            ).get("approval_matrix_event_id")
+            expected.update(
+                {
+                    "grant_id": trace_rxp["grant_id"],
+                    "receipt_digest": trace_rxp["receipt_digest"],
+                    "approval_event_id": approval_event_id,
+                }
+            )
+            if event_id != approval_event_id:
+                raise AcceptanceError("Matrix approval event id does not match the trace")
+        elif event_type == "FAILURE_RECOVERY":
+            if not sender.startswith("@worker-"):
+                raise AcceptanceError("FAILURE_RECOVERY must be sent by a worker principal")
+            reassigned = [
+                _object(item, "trace reassignment event")
+                for item in _array(trace.get("events"), "trace events")
+                if isinstance(item, dict) and item.get("type") == "task.reassigned"
+            ]
+            if len(reassigned) != 1:
+                raise AcceptanceError("recovery Matrix event requires one trace reassignment")
+            reassignment = _object(reassigned[0].get("payload"), "reassignment payload")
+            expected.update(
+                {
+                    "old_worker_id": reassignment.get("from_assignee"),
+                    "new_worker_id": reassignment.get("to_assignee"),
+                    "effect_id": _text(content.get("effect_id"), "Matrix effect_id"),
+                    "checkpoint_sha256": _sha256(
+                        content.get("checkpoint_sha256"), "Matrix checkpoint_sha256"
+                    ),
+                }
+            )
+            if scenario_id == "worker_timeout_reassign":
+                primary_recovery = dict(content)
+        elif event_type == "TERMINAL":
+            if not sender.startswith("@ego-"):
+                raise AcceptanceError("TERMINAL must be sent by the Ego principal")
+            decisions = [
+                _object(item, "trace Decision event")
+                for item in _array(trace.get("events"), "trace events")
+                if isinstance(item, dict) and item.get("type") == "decision.committed"
+            ]
+            if len(decisions) != 1:
+                raise AcceptanceError("terminal Matrix event requires one trace Decision")
+            trace_decision = _object(decisions[0].get("payload"), "trace Decision payload")
+            expected.update(
+                {
+                    "evidence_digest": trace_rxp["evidence_digest"],
+                    "verdict": trace_decision.get("verdict"),
+                }
+            )
+        else:
+            raise AcceptanceError("unsupported Matrix event type %s" % event_type)
+        if content != expected:
+            raise AcceptanceError("Matrix content does not match its typed trace binding")
     for scenario_id in MVP_SCENARIOS:
         sequences = sequences_by_scenario.get(scenario_id, [])
         if sequences != list(range(1, len(sequences) + 1)):
             raise AcceptanceError(
                 "Matrix event sequence for %s must be contiguous" % scenario_id
             )
+        timestamps = timestamps_by_scenario.get(scenario_id, [])
+        if timestamps != sorted(timestamps) or len(timestamps) != len(set(timestamps)):
+            raise AcceptanceError("Matrix timestamps must be strictly increasing per scenario")
+        if len(rooms_by_scenario.get(scenario_id, set())) != 1:
+            raise AcceptanceError("each scenario must use exactly one Matrix room")
         required = set(BASE_MATRIX_EVENT_TYPES)
         if scenario_id == "worker_timeout_reassign":
             required.add("FAILURE_RECOVERY")
@@ -481,6 +664,12 @@ def _validate_matrix_events(
                 "Matrix raw events for %s lack required types: %s"
                 % (scenario_id, missing)
             )
+    if primary_recovery is None:
+        raise AcceptanceError("primary recovery Matrix event is missing")
+    return {
+        "root": matrix_events_digest(records),
+        "primary_recovery": primary_recovery,
+    }
 
 
 def _validate_gpu_metrics(path: Path, frozen: Mapping[str, Any]) -> Dict[str, Any]:
@@ -496,9 +685,15 @@ def _validate_gpu_metrics(path: Path, frozen: Mapping[str, Any]) -> Dict[str, An
         job_ids.add(_text(record.get("job_id"), "GPU job_id"))
         gpu_ids.add(_text(record.get("gpu_uuid"), "GPU uuid"))
         _text(record.get("gpu_model"), "GPU model")
-        _is_finite_number(record.get("utilization_pct"), "GPU utilization_pct")
+        utilization = record.get("utilization_pct")
+        _is_finite_number(utilization, "GPU utilization_pct")
+        if float(cast(Any, utilization)) < 0.0 or float(cast(Any, utilization)) > 100.0:
+            raise AcceptanceError("GPU utilization_pct must be in [0, 100]")
         _integer(record.get("memory_used_bytes"), "GPU memory_used_bytes", 0)
-        _is_finite_number(record.get("power_w"), "GPU power_w")
+        power = record.get("power_w")
+        _is_finite_number(power, "GPU power_w")
+        if float(cast(Any, power)) < 0.0:
+            raise AcceptanceError("GPU power_w must be non-negative")
     if len(records) < 2 or len(job_ids) != 1 or len(gpu_ids) != 1:
         raise AcceptanceError("GPU evidence requires >=2 samples from one job and one GPU")
     if timestamps != sorted(timestamps) or len(set(timestamps)) != len(timestamps):
@@ -525,6 +720,7 @@ def _validate_raw_metrics(
     seen_ids: Set[str] = set()
     seen_pairs: Set[Tuple[str, str]] = set()
     included_values: List[int] = []
+    included_by_cell: Dict[str, List[int]] = {cell_id: [] for cell_id in cell_ids}
     filtered = 0
     for record in records:
         record_id = _text(record.get("record_id"), "raw metric record_id")
@@ -547,6 +743,7 @@ def _validate_raw_metrics(
             if record.get("filter_id") not in (None, ""):
                 raise AcceptanceError("included raw metric must not name a filter")
             included_values.append(value_scaled)
+            included_by_cell[cell_id].append(value_scaled)
         else:
             filter_id = _text(record.get("filter_id"), "raw metric filter_id")
             if filter_id not in declared_filters:
@@ -575,7 +772,38 @@ def _validate_raw_metrics(
     mismatched = [key for key, value in expected_summary.items() if summary.get(key) != value]
     if mismatched:
         raise AcceptanceError("metric summary mismatch: %s" % ", ".join(mismatched))
-    return expected_summary
+
+    policy = _object(metric.get("decision_policy"), "metric_contract.decision_policy")
+    policy_kind = str(policy["kind"])
+    if policy_kind == "minimum_mean":
+        policy_cell = str(policy["cell_id"])
+        values = included_by_cell[policy_cell]
+        if not values:
+            raise AcceptanceError("decision policy cell has no included values")
+        passed = Fraction(sum(values), len(values)) >= _fraction(
+            policy["minimum_scaled_fraction"], "minimum_scaled_fraction"
+        )
+    else:
+        baseline_values = included_by_cell[str(policy["baseline_cell_id"])]
+        candidate_values = included_by_cell[str(policy["candidate_cell_id"])]
+        if not baseline_values or not candidate_values:
+            raise AcceptanceError("decision policy cells have no included values")
+        baseline_mean = Fraction(sum(baseline_values), len(baseline_values))
+        candidate_mean = Fraction(sum(candidate_values), len(candidate_values))
+        degradation_limit = _fraction(
+            policy["max_degradation_scaled_fraction"],
+            "max_degradation_scaled_fraction",
+            nonnegative=True,
+        )
+        passed = candidate_mean >= baseline_mean - degradation_limit
+    return {
+        "summary": expected_summary,
+        "verdict": "KEEP" if passed else "REJECT",
+        "rationale_code": policy[
+            "pass_rationale_code" if passed else "fail_rationale_code"
+        ],
+        "decision_policy_sha256": decision_policy_digest(policy),
+    }
 
 
 def _validate_rxp_ledger(path: Path, frozen: Mapping[str, Any], cell_id: str) -> Dict[str, Any]:
@@ -618,6 +846,8 @@ def _validate_rxp_ledger(path: Path, frozen: Mapping[str, Any], cell_id: str) ->
         raise AcceptanceError("RXP Intent does not bind frozen inputs: %s" % mismatch)
     receipt = _object(receipt_entry.document, "RXP Receipt")
     usage = _object(receipt.get("usage"), "RXP Receipt usage")
+    metadata = _object(receipt.get("metadata"), "RXP Receipt metadata")
+    job_id = _text(metadata.get("job_id"), "RXP Receipt job_id")
     budget = _object(frozen.get("budget"), "budget")
     if usage.get("gpu_count") != 1 or _integer(usage.get("gpu_time_seconds"), "RXP GPU seconds", 1) > budget["max_gpu_seconds"]:
         raise AcceptanceError("RXP Receipt does not prove one bounded real GPU execution")
@@ -649,6 +879,7 @@ def _validate_rxp_ledger(path: Path, frozen: Mapping[str, Any], cell_id: str) ->
         "evidence_root": decision["evidence_root"],
         "evidence": evidence,
         "usage": usage,
+        "job_id": job_id,
     }
 
 
@@ -785,13 +1016,27 @@ def _validate_review(path: Path, evidence_root: str, rxp: Mapping[str, Any]) -> 
         raise AcceptanceError("review names a mismatched evidence root")
 
 
-def _validate_recovery(path: Path, receipts: Mapping[str, Any]) -> None:
+def _validate_recovery(
+    root: Path,
+    path: Path,
+    checkpoint_path: Path,
+    receipts: Mapping[str, Any],
+    primary_trace: Mapping[str, Any],
+    matrix_recovery: Mapping[str, Any],
+) -> None:
     recovery = _object(_load_json(path, "failure recovery"), "failure recovery")
     if recovery.get("schema_version") != RECOVERY_SCHEMA_VERSION:
         raise AcceptanceError("unsupported failure recovery schema")
     if recovery.get("scenario_id") != "worker_timeout_reassign" or recovery.get("fault_type") != "worker_timeout":
         raise AcceptanceError("failure recovery must prove worker_timeout_reassign")
-    _sha256(recovery.get("checkpoint_sha256"), "checkpoint_sha256")
+    checkpoint_file = _source_file(
+        root, recovery.get("checkpoint_file"), "recovery.checkpoint_file"
+    )
+    if checkpoint_file != checkpoint_path:
+        raise AcceptanceError("recovery checkpoint differs from the descriptor")
+    checkpoint_sha256 = _sha256(recovery.get("checkpoint_sha256"), "checkpoint_sha256")
+    if _digest_bytes(checkpoint_file.read_bytes()) != checkpoint_sha256:
+        raise AcceptanceError("recovery checkpoint artifact digest mismatch")
     old_worker = _text(recovery.get("old_worker_id"), "old_worker_id")
     new_worker = _text(recovery.get("new_worker_id"), "new_worker_id")
     if old_worker == new_worker:
@@ -801,14 +1046,54 @@ def _validate_recovery(path: Path, receipts: Mapping[str, Any]) -> None:
     effect_ids = [_text(item, "effect_id") for item in _array(recovery.get("effect_ids"), "effect_ids")]
     if len(effect_ids) != 1:
         raise AcceptanceError("failure recovery must prove exactly one effect")
-    _text(recovery.get("idempotency_key"), "idempotency_key")
-    _integer(recovery.get("mttr_ms"), "mttr_ms", 0)
+    idempotency_key = _text(recovery.get("idempotency_key"), "idempotency_key")
+    started_ns = _integer(recovery.get("recovery_started_at_ns"), "recovery_started_at_ns", 0)
+    completed_ns = _integer(
+        recovery.get("recovery_completed_at_ns"), "recovery_completed_at_ns", 0
+    )
+    if completed_ns <= started_ns:
+        raise AcceptanceError("recovery timestamps are not strictly increasing")
+    mttr_ms = _integer(recovery.get("mttr_ms"), "mttr_ms", 0)
+    if mttr_ms != (completed_ns - started_ns) // 1_000_000:
+        raise AcceptanceError("recovery MTTR is not recomputable from timestamps")
     receipt_ids = [_text(item, "recovery receipt_id") for item in _array(recovery.get("official_receipt_ids"), "official_receipt_ids")]
     if not receipt_ids or any(item not in receipts for item in receipt_ids):
         raise AcceptanceError("failure recovery references missing official receipts")
     kinds = {receipts[item]["kind"] for item in receipt_ids}
     if not {"cancel", "replan"}.issubset(kinds):
         raise AcceptanceError("failure recovery must reference official cancel and replan receipts")
+    fence_receipt_id = _text(
+        recovery.get("scheduler_fence_receipt_id"), "scheduler_fence_receipt_id"
+    )
+    if fence_receipt_id not in receipts or receipts[fence_receipt_id]["kind"] != "cancel":
+        raise AcceptanceError("scheduler fencing is not bound to the cancel receipt")
+
+    expected_matrix = {
+        "old_worker_id": old_worker,
+        "new_worker_id": new_worker,
+        "effect_id": effect_ids[0],
+        "checkpoint_sha256": checkpoint_sha256,
+    }
+    if any(matrix_recovery.get(key) != value for key, value in expected_matrix.items()):
+        raise AcceptanceError("failure recovery disagrees with the Matrix recovery event")
+    trace_events = [
+        _object(item, "recovery trace event")
+        for item in _array(primary_trace.get("events"), "primary trace events")
+    ]
+    reassignments = [item for item in trace_events if item.get("type") == "task.reassigned"]
+    effects = [item for item in trace_events if item.get("type") == "effect.committed"]
+    if len(reassignments) != 1 or len(effects) != 1:
+        raise AcceptanceError("recovery trace must contain one reassignment and one effect")
+    reassignment = _object(reassignments[0].get("payload"), "reassignment payload")
+    effect = _object(effects[0].get("payload"), "effect payload")
+    if (
+        reassignment.get("from_assignee") != old_worker
+        or reassignment.get("to_assignee") != new_worker
+        or effect.get("effect_id") != effect_ids[0]
+        or effect.get("idempotency_key") != idempotency_key
+        or int(reassignments[0]["sequence"]) >= int(effects[0]["sequence"])
+    ):
+        raise AcceptanceError("failure recovery disagrees with the trace effect chain")
 
 
 def _validate_decision(
@@ -816,6 +1101,9 @@ def _validate_decision(
     trace_root: str,
     evidence_root: str,
     rxp: Mapping[str, Any],
+    primary_trace: Mapping[str, Any],
+    metric_result: Mapping[str, Any],
+    matrix_events_root: str,
 ) -> None:
     decision = _object(_load_json(path, "acceptance decision"), "acceptance decision")
     if decision.get("schema_version") != DECISION_SCHEMA_VERSION:
@@ -827,6 +1115,39 @@ def _validate_decision(
         raise AcceptanceError("Decision does not bind the verified trace/evidence roots")
     if decision.get("rxp_decision_digest") != rxp["decision_digest"]:
         raise AcceptanceError("Decision does not bind the RXP Decision")
+    expected_verdict = metric_result["verdict"]
+    expected_rationale = metric_result["rationale_code"]
+    expected_policy_digest = metric_result["decision_policy_sha256"]
+    if (
+        decision.get("verdict") != expected_verdict
+        or decision.get("rationale_code") != expected_rationale
+        or decision.get("decision_policy_sha256") != expected_policy_digest
+        or decision.get("matrix_events_root") != matrix_events_root
+    ):
+        raise AcceptanceError("top-level Decision disagrees with recomputed raw metrics")
+
+    rxp_decision = _object(rxp.get("decision_document"), "RXP Decision")
+    if (
+        rxp_decision.get("verdict") != expected_verdict
+        or rxp_decision.get("rationale_code") != expected_rationale
+    ):
+        raise AcceptanceError("RXP Decision disagrees with recomputed raw metrics")
+
+    trace_events = [
+        _object(item, "primary trace event")
+        for item in _array(primary_trace.get("events"), "primary trace events")
+        if isinstance(item, dict) and item.get("type") == "decision.committed"
+    ]
+    if len(trace_events) != 1:
+        raise AcceptanceError("primary trace must contain exactly one committed Decision")
+    trace_decision = _object(trace_events[0].get("payload"), "trace Decision payload")
+    if (
+        trace_decision.get("verdict") != expected_verdict
+        or trace_decision.get("rationale_code") != expected_rationale
+        or trace_decision.get("decision_policy_sha256") != expected_policy_digest
+        or trace_decision.get("matrix_events_root") != matrix_events_root
+    ):
+        raise AcceptanceError("trace Decision disagrees with recomputed raw metrics")
 
 
 def _validate_source(root: Path) -> _SourceReport:
@@ -846,9 +1167,12 @@ def _validate_source(root: Path) -> _SourceReport:
     receipts = _validate_agentteams_receipts(
         root, files["agentteams_receipts"], verified_traces
     )
-    _validate_matrix_events(files["matrix_events"], verified_traces)
+    matrix_report = _validate_matrix_events(files["matrix_events"], verified_traces)
+    matrix_events_root = str(matrix_report["root"])
     gpu = _validate_gpu_metrics(files["gpu_raw_metrics"], frozen)
-    _validate_raw_metrics(files["raw_metrics"], files["metric_summary"], frozen)
+    metric_result = _validate_raw_metrics(
+        files["raw_metrics"], files["metric_summary"], frozen
+    )
     rxp = _validate_rxp_ledger(files["rxp_ledger"], frozen, str(run["rxp_cell_id"]))
     trace_rxp = _object(primary_trace.get("rxp"), "primary trace RXP")
     expected_trace_rxp = {
@@ -861,16 +1185,37 @@ def _validate_source(root: Path) -> _SourceReport:
     mismatch = [key for key, value in expected_trace_rxp.items() if trace_rxp.get(key) != value]
     if mismatch:
         raise AcceptanceError("primary trace does not bind the RXP chain: %s" % mismatch)
-    if rxp["usage"]["gpu_time_seconds"] > gpu["gpu_seconds"]:
-        raise AcceptanceError("RXP GPU usage exceeds the captured telemetry interval")
+    reported_gpu_seconds = int(rxp["usage"]["gpu_time_seconds"])
+    observed_gpu_seconds = int(gpu["gpu_seconds"])
+    tolerance_seconds = max(5, math.ceil(observed_gpu_seconds * 0.05))
+    if abs(reported_gpu_seconds - observed_gpu_seconds) > tolerance_seconds:
+        raise AcceptanceError("RXP GPU usage does not match captured telemetry time")
+    if rxp["job_id"] != gpu["job_id"]:
+        raise AcceptanceError("RXP Receipt job_id does not match GPU telemetry")
     evidence_root = _validate_evidence_gate(root, files["evidence_gate"], rxp, files["review"])
     trace_root = str(primary["roots"]["trace_root"])
     _validate_review(files["review"], evidence_root, rxp)
-    _validate_recovery(files["failure_recovery"], receipts)
-    _validate_decision(files["decision"], trace_root, evidence_root, rxp)
+    _validate_recovery(
+        root,
+        files["failure_recovery"],
+        files["checkpoint"],
+        receipts,
+        primary_trace,
+        _object(matrix_report["primary_recovery"], "primary Matrix recovery"),
+    )
+    _validate_decision(
+        files["decision"],
+        trace_root,
+        evidence_root,
+        rxp,
+        primary_trace,
+        metric_result,
+        matrix_events_root,
+    )
     return _SourceReport(
         descriptor=descriptor,
         trace_root=trace_root,
+        matrix_events_root=matrix_events_root,
         evidence_root=evidence_root,
         benchmark_evidence_root=str(primary["roots"]["benchmark_evidence_root"]),
         rxp_ledger_root=str(rxp["ledger_root"]),
@@ -902,6 +1247,7 @@ def _bundle_commitment(manifest: Mapping[str, Any]) -> Dict[str, Any]:
         "gate": manifest["gate"],
         "roots": {
             "trace_root": manifest["roots"]["trace_root"],
+            "matrix_events_root": manifest["roots"]["matrix_events_root"],
             "evidence_root": manifest["roots"]["evidence_root"],
             "benchmark_evidence_root": manifest["roots"]["benchmark_evidence_root"],
             "rxp_ledger_root": manifest["roots"]["rxp_ledger_root"],
@@ -919,14 +1265,18 @@ def _manifest_for_source(root: Path, report: _SourceReport) -> Dict[str, Any]:
         "created_at": descriptor["created_at"],
         "truth_boundary": {
             **_object(descriptor["truth_boundary"], "truth_boundary"),
+            "source_authenticity_status": "UNVERIFIED",
+            "live_claim_allowed": False,
             "content_hash_limit": (
                 "The bundle proves byte integrity and cross-artifact consistency; content "
                 "hashes alone are not a third-party signature of an external service."
             ),
         },
         "gate": {
-            "profile": "mvp-8",
-            "mvp_status": "PASS",
+            "profile": "mvp-8-contract",
+            "mvp_contract_status": "PASS",
+            "source_authenticity_status": "UNVERIFIED",
+            "live_claim_status": "NOT_VERIFIED",
             "passed_scenarios": list(report.mvp_scenarios),
             "passed_count": 8,
             "corpus_count": 14,
@@ -939,6 +1289,7 @@ def _manifest_for_source(root: Path, report: _SourceReport) -> Dict[str, Any]:
         },
         "roots": {
             "trace_root": report.trace_root,
+            "matrix_events_root": report.matrix_events_root,
             "evidence_root": report.evidence_root,
             "benchmark_evidence_root": report.benchmark_evidence_root,
             "rxp_ledger_root": report.rxp_ledger_root,
@@ -979,7 +1330,10 @@ def build_bundle(source: Path, output: Path) -> Dict[str, Any]:
     )
     return {
         "schema_version": ACCEPTANCE_SCHEMA_VERSION,
-        "status": "PASS",
+        "status": "CONTRACT_PASS_ORIGIN_UNVERIFIED",
+        "contract_status": "PASS",
+        "external_origin_status": "UNVERIFIED",
+        "live_claim_allowed": False,
         "bundle": str(output),
         "bundle_root": manifest["roots"]["bundle_root"],
         "mvp_coverage": "8/14",
@@ -1037,13 +1391,21 @@ def verify_bundle(bundle: Path) -> Dict[str, Any]:
     if claimed_root != recomputed:
         raise AcceptanceError("bundle_root mismatch")
     gate = _object(manifest.get("gate"), "gate")
-    if gate.get("mvp_status") != "PASS" or gate.get("coverage_fraction") != "8/14":
-        raise AcceptanceError("bundle is not an honest MVP PASS")
+    if (
+        gate.get("mvp_contract_status") != "PASS"
+        or gate.get("source_authenticity_status") != "UNVERIFIED"
+        or gate.get("live_claim_status") != "NOT_VERIFIED"
+        or gate.get("coverage_fraction") != "8/14"
+    ):
+        raise AcceptanceError("bundle does not preserve the contract/origin truth boundary")
     if gate.get("full_release_status") != "NOT_EVALUATED":
         raise AcceptanceError("MVP bundle illegally promotes the full release gate")
     return {
         "schema_version": ACCEPTANCE_SCHEMA_VERSION,
-        "status": "PASS",
+        "status": "CONTRACT_PASS_ORIGIN_UNVERIFIED",
+        "contract_status": "PASS",
+        "external_origin_status": "UNVERIFIED",
+        "live_claim_allowed": False,
         "bundle": str(bundle),
         "bundle_root": claimed_root,
         "mvp_coverage": "8/14",

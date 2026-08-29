@@ -39,6 +39,8 @@ from semifinal_acceptance.bundle import (
     MVP_SCENARIOS,
     RECOVERY_SCHEMA_VERSION,
     REVIEW_SCHEMA_VERSION,
+    decision_policy_digest,
+    matrix_events_digest,
 )
 from tests.benchmarks.trace_fixture import build_trace
 
@@ -72,7 +74,10 @@ def _replace(value: Any, old: Any, new: Any) -> Any:
 
 
 def live_trace(
-    scenario_id: str, seed: int, rxp: Optional[Dict[str, str]] = None
+    scenario_id: str,
+    seed: int,
+    rxp: Optional[Dict[str, str]] = None,
+    decision_binding: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     scenario = next(item for item in load_corpus().scenarios if item.id == scenario_id)
     trace = build_trace(scenario, seed)
@@ -93,6 +98,10 @@ def live_trace(
                 event["payload"]["evidence_digest"] = rxp["evidence_digest"]
         trace["rxp"] = rxp
         trace["official_response_identifiers"]["matrix_root"] = rxp["matrix_root"]
+    if decision_binding is not None:
+        for event in trace["events"]:
+            if event["type"] == "decision.committed":
+                event["payload"].update(decision_binding)
     trace["bridge_event_chain"]["total"] = len(trace["events"])
     return trace
 
@@ -132,11 +141,24 @@ def _official_receipts(
                 sequence,
                 kind,
             )
+            endpoint = "/api/v1/%s" % kind.replace("_", "-")
+            request_id = "request-%02d" % sequence
+            response_id = "response-%02d" % sequence
+            captured_at = "2026-08-29T01:%02d:00Z" % (sequence % 60)
             raw = {
+                "schema_version": "egoagentos.agentteams-http-response/v1",
                 "scenario_id": scenario_id,
                 "kind": kind,
-                "request_id": "request-%02d" % sequence,
-                "ok": True,
+                "request_id": request_id,
+                "response_id": response_id,
+                "project_id": trace["project_id"],
+                "task_id": trace["task_id"],
+                "correlation_id": trace["correlation_id"],
+                "method": "POST",
+                "endpoint": endpoint,
+                "status_code": 200,
+                "captured_at": captured_at,
+                "body": {"ok": True},
             }
             raw_path = source / relative
             write_json(raw_path, raw)
@@ -150,8 +172,12 @@ def _official_receipts(
                     "project_id": trace["project_id"],
                     "task_id": trace["task_id"],
                     "correlation_id": trace["correlation_id"],
-                    "endpoint": "/api/v1/%s" % kind.replace("_", "-"),
+                    "method": "POST",
+                    "endpoint": endpoint,
+                    "request_id": request_id,
+                    "response_id": response_id,
                     "status_code": 200,
+                    "captured_at": captured_at,
                     "raw_file": relative,
                     "raw_sha256": sha_bytes(raw_path.read_bytes()),
                 }
@@ -163,6 +189,87 @@ def _official_receipts(
         {"schema_version": AGENTTEAMS_RECEIPTS_SCHEMA_VERSION, "receipts": receipts},
     )
     return path, ids
+
+
+def _matrix_records_for_traces(traces: Dict[str, Dict[str, Any]]) -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    event_index = 0
+    for scenario_id in MVP_SCENARIOS:
+        trace = traces[scenario_id]
+        matrix_types = ["TASK_REQUEST", "APPROVAL_GRANTED", "TERMINAL"]
+        if scenario_id == "worker_timeout_reassign":
+            matrix_types.insert(2, "FAILURE_RECOVERY")
+        for sequence, event_type in enumerate(matrix_types, start=1):
+            event_index += 1
+            trace_rxp = trace["rxp"]
+            room_id = "!room-%s:example.org" % scenario_id.replace("_", "-")
+            content = {
+                "event_type": event_type,
+                "scenario_id": scenario_id,
+                "task_id": trace["task_id"],
+                "correlation_id": trace["correlation_id"],
+                "matrix_root": trace_rxp["matrix_root"],
+            }
+            event_id = "$event-%d" % event_index
+            if event_type == "TASK_REQUEST":
+                sender = "@bridge:example.org"
+                content["intent_digest"] = trace_rxp["intent_digest"]
+            elif event_type == "APPROVAL_GRANTED":
+                sender = "@human-approver:example.org"
+                event_id = trace["official_response_identifiers"][
+                    "approval_matrix_event_id"
+                ]
+                content.update(
+                    {
+                        "grant_id": trace_rxp["grant_id"],
+                        "receipt_digest": trace_rxp["receipt_digest"],
+                        "approval_event_id": event_id,
+                    }
+                )
+            elif event_type == "FAILURE_RECOVERY":
+                sender = "@worker-runtime:example.org"
+                reassignment = next(
+                    item for item in trace["events"] if item["type"] == "task.reassigned"
+                )["payload"]
+                content.update(
+                    {
+                        "old_worker_id": reassignment["from_assignee"],
+                        "new_worker_id": reassignment["to_assignee"],
+                        "effect_id": next(
+                            item
+                            for item in trace["events"]
+                            if item["type"] == "effect.committed"
+                        )["payload"]["effect_id"],
+                        "checkpoint_sha256": sha_label("checkpoint"),
+                    }
+                )
+            else:
+                sender = "@ego-decision:example.org"
+                trace_decision = next(
+                    item for item in trace["events"] if item["type"] == "decision.committed"
+                )["payload"]
+                content.update(
+                    {
+                        "evidence_digest": trace_rxp["evidence_digest"],
+                        "verdict": trace_decision["verdict"],
+                    }
+                )
+            records.append(
+                {
+                    "sequence": sequence,
+                    "event_id": event_id,
+                    "scenario_id": scenario_id,
+                    "type": event_type,
+                    "project_id": trace["project_id"],
+                    "task_id": trace["task_id"],
+                    "correlation_id": trace["correlation_id"],
+                    "room_id": room_id,
+                    "sender": sender,
+                    "origin_server_ts": 1_000 * event_index,
+                    "content": content,
+                }
+            )
+    return records
 
 
 def _build_rxp(
@@ -255,7 +362,7 @@ def _build_rxp(
         usage=ResourceUsage(
             gpu_count=1,
             wall_time_seconds=120,
-            gpu_time_seconds=60,
+            gpu_time_seconds=120,
             artifact_bytes=len(output_path.read_bytes()),
         ),
         determinism_level=DeterminismLevel.D2_SEEDED_ENV_BOUND,
@@ -374,6 +481,13 @@ def build_acceptance_source(source: Path) -> Path:
             "sample_ids": ["s1", "s2"],
             "matrix_cells": [{"cell_id": "cell-live-gpu", "seed": 20260829}],
             "declared_filters": [],
+            "decision_policy": {
+                "kind": "minimum_mean",
+                "cell_id": "cell-live-gpu",
+                "minimum_scaled_fraction": "100/1",
+                "pass_rationale_code": "BOUNDED_GATE_PASS",
+                "fail_rationale_code": "METRIC_THRESHOLD_FAIL",
+            },
         },
         "budget": {
             "max_gpu_count": 1,
@@ -387,6 +501,7 @@ def build_acceptance_source(source: Path) -> Path:
     }
     frozen_path = source / "inputs/frozen-inputs.json"
     write_json(frozen_path, frozen)
+    policy_digest = decision_policy_digest(frozen["metric_contract"]["decision_policy"])
 
     raw_metrics_path = source / "metrics/raw.jsonl"
     raw_records = [
@@ -452,6 +567,8 @@ def build_acceptance_source(source: Path) -> Path:
     )
     execution_trace_path = source / "runtime/execution-trace.json"
     write_json(execution_trace_path, {"job_id": "gpu-job-001", "spans": ["start", "finish"]})
+    checkpoint_path = source / "runtime/checkpoint.bin"
+    checkpoint_path.write_bytes(b"checkpoint")
 
     primary_seed = 91
     provisional_traces: Dict[str, Dict[str, Any]] = {}
@@ -470,34 +587,6 @@ def build_acceptance_source(source: Path) -> Path:
     }
     receipts_path, receipt_ids = _official_receipts(source, provisional_traces)
     matrix_path = source / "agentteams/matrix-events.jsonl"
-    matrix_records = []
-    event_index = 0
-    for scenario_id in MVP_SCENARIOS:
-        trace = provisional_traces[scenario_id]
-        matrix_types = ["TASK_REQUEST", "APPROVAL_GRANTED", "TERMINAL"]
-        if scenario_id == "worker_timeout_reassign":
-            matrix_types.insert(2, "FAILURE_RECOVERY")
-        for sequence, event_type in enumerate(matrix_types, start=1):
-            event_index += 1
-            matrix_records.append(
-                {
-                    "sequence": sequence,
-                    "event_id": "$event-%d" % event_index,
-                    "scenario_id": scenario_id,
-                    "type": event_type,
-                    "project_id": trace["project_id"],
-                    "task_id": trace["task_id"],
-                    "correlation_id": trace["correlation_id"],
-                    "room_id": "!room:example.org",
-                    "sender": "@agent:example.org",
-                    "origin_server_ts": 1_000 + event_index,
-                    "content": {"event_type": event_type},
-                }
-            )
-    write_jsonl(
-        matrix_path,
-        matrix_records,
-    )
 
     review_path = source / "review/independent-review.json"
     write_json(
@@ -528,6 +617,7 @@ def build_acceptance_source(source: Path) -> Path:
     rxp_path, rxp = _build_rxp(source, frozen, evidence_files)
 
     trace_paths: Dict[str, str] = {}
+    final_traces: Dict[str, Dict[str, Any]] = {}
     for index, scenario_id in enumerate(MVP_SCENARIOS, start=1):
         seed = primary_seed if scenario_id == "worker_timeout_reassign" else 100 + index
         rxp_binding = None
@@ -539,7 +629,15 @@ def build_acceptance_source(source: Path) -> Path:
                 "evidence_digest": rxp["evidence_root"],
                 "matrix_root": rxp["ledger"]["root"],
             }
-        trace = live_trace(scenario_id, seed, rxp_binding)
+        decision_binding = None
+        if scenario_id == "worker_timeout_reassign":
+            decision_binding = {
+                "verdict": "KEEP",
+                "rationale_code": "BOUNDED_GATE_PASS",
+                "decision_policy_sha256": policy_digest,
+            }
+        trace = live_trace(scenario_id, seed, rxp_binding, decision_binding)
+        final_traces[scenario_id] = trace
         path = source / ("traces/%s.json" % scenario_id)
         write_json(path, trace)
         trace_paths[scenario_id] = path.relative_to(source).as_posix()
@@ -553,6 +651,16 @@ def build_acceptance_source(source: Path) -> Path:
                 }
             )
             primary_trace_path = path
+
+    matrix_records = _matrix_records_for_traces(final_traces)
+    write_jsonl(matrix_path, matrix_records)
+    matrix_root = matrix_events_digest(matrix_records)
+    primary_trace = final_traces["worker_timeout_reassign"]
+    primary_decision = next(
+        item for item in primary_trace["events"] if item["type"] == "decision.committed"
+    )
+    primary_decision["payload"]["matrix_events_root"] = matrix_root
+    write_json(primary_trace_path, primary_trace)
 
     evidence_items = []
     for evidence_type in EVIDENCE_KINDS:
@@ -580,23 +688,39 @@ def build_acceptance_source(source: Path) -> Path:
         },
     )
     recovery_path = source / "runtime/failure-recovery.json"
+    primary_reassignment = next(
+        item
+        for item in final_traces["worker_timeout_reassign"]["events"]
+        if item["type"] == "task.reassigned"
+    )["payload"]
+    primary_effect = next(
+        item
+        for item in final_traces["worker_timeout_reassign"]["events"]
+        if item["type"] == "effect.committed"
+    )["payload"]
     write_json(
         recovery_path,
         {
             "schema_version": RECOVERY_SCHEMA_VERSION,
             "scenario_id": "worker_timeout_reassign",
             "fault_type": "worker_timeout",
+            "checkpoint_file": checkpoint_path.relative_to(source).as_posix(),
             "checkpoint_sha256": sha_label("checkpoint"),
-            "old_worker_id": "worker-a",
-            "new_worker_id": "worker-b",
+            "old_worker_id": primary_reassignment["from_assignee"],
+            "new_worker_id": primary_reassignment["to_assignee"],
             "old_worker_fenced": True,
             "checkpoint_restored": True,
-            "effect_ids": ["effect-live-001"],
-            "idempotency_key": "idem-live-001",
+            "effect_ids": [primary_effect["effect_id"]],
+            "idempotency_key": primary_effect["idempotency_key"],
+            "recovery_started_at_ns": 1_000_000_000,
+            "recovery_completed_at_ns": 1_250_000_000,
             "mttr_ms": 250,
             "official_receipt_ids": [
                 receipt_ids["worker_timeout_reassign:cancel"],
                 receipt_ids["worker_timeout_reassign:replan"],
+            ],
+            "scheduler_fence_receipt_id": receipt_ids[
+                "worker_timeout_reassign:cancel"
             ],
         },
     )
@@ -612,6 +736,9 @@ def build_acceptance_source(source: Path) -> Path:
             "trace_root": primary_trace_root,
             "evidence_root": rxp["evidence_root"],
             "rxp_decision_digest": rxp["decision_digest"],
+            "rationale_code": "BOUNDED_GATE_PASS",
+            "decision_policy_sha256": policy_digest,
+            "matrix_events_root": matrix_root,
         },
     )
 
@@ -646,9 +773,7 @@ def build_acceptance_source(source: Path) -> Path:
             "execution_mode": "real-agentteams",
             "synthetic": False,
             "gpu_execution": "real",
-            "external_origin_authentication": (
-                "Official response identifiers and bytes are captured; unit fixture origin is not a remote attestation."
-            ),
+            "external_origin_authentication": "UNVERIFIED_OPERATOR_ASSERTION",
         },
         "run": run,
         "corpus": {
@@ -657,7 +782,7 @@ def build_acceptance_source(source: Path) -> Path:
             "corpus_digest": corpus.digest,
             "total_scenarios": len(corpus.scenarios),
             "mvp_scenarios": list(MVP_SCENARIOS),
-            "mvp_status": "PASS",
+            "mvp_contract_status": "PASS",
             "full_release_status": "NOT_EVALUATED",
         },
         "files": {
@@ -670,6 +795,7 @@ def build_acceptance_source(source: Path) -> Path:
             "rxp_ledger": rxp_path.relative_to(source).as_posix(),
             "evidence_gate": gate_path.relative_to(source).as_posix(),
             "failure_recovery": recovery_path.relative_to(source).as_posix(),
+            "checkpoint": checkpoint_path.relative_to(source).as_posix(),
             "review": review_path.relative_to(source).as_posix(),
             "decision": decision_path.relative_to(source).as_posix(),
         },

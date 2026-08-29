@@ -5,9 +5,13 @@ AgentTeams/RXP/GPU acceptance run into deterministic, content-addressed bytes.
 The builder and verifier make no network or GPU calls.
 
 The package deliberately implements only the judge-facing eight-scenario MVP
-gate. A valid manifest always reports `8/14` coverage and
-`full_release_status=NOT_EVALUATED`; only `rxp-bench --release-gate` over all
-14 scenarios and all configured repetitions may produce a full release claim.
+contract gate. A valid manifest reports `CONTRACT_PASS_ORIGIN_UNVERIFIED`,
+`live_claim_allowed=false`, `8/14` coverage, and
+`full_release_status=NOT_EVALUATED`. Offline byte checks cannot authenticate an
+external service as the producer. Only a future verifier for actual upstream
+signatures/attestations may promote source authenticity; this v1 format never
+does. Separately, only `rxp-bench --release-gate` over all 14 scenarios and all
+configured repetitions may produce a full release claim.
 
 ## Build and verify
 
@@ -54,6 +58,6 @@ secret, synthetic marker, resource-bound violation, or changed byte fails
 closed.
 
 Content hashes prove byte integrity and cross-artifact consistency. They are
-not, by themselves, a third-party signature that a remote service emitted the
-bytes; that limit is repeated in every manifest.
-
+not a third-party signature that a remote service emitted the bytes. Even an
+entirely local fixture can satisfy structural tests, so this limit is
+machine-readable in every manifest and CLI result rather than only prose.

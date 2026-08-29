@@ -107,6 +107,28 @@ def raw_fixture() -> dict[str, object]:
             "approval_receipt_sha256": "4" * 64,
             "agentteams_receipt_sha256": "5" * 64,
             "matrix_plan_sha256": "6" * 64,
+            "binding_artifacts": {
+                "environment_lock": {
+                    "basename": "environment.lock",
+                    "bytes": 10,
+                    "sha256": "7" * 64,
+                },
+                "approval_receipt": {
+                    "basename": "approval.json",
+                    "bytes": 10,
+                    "sha256": "4" * 64,
+                },
+                "agentteams_receipt": {
+                    "basename": "agentteams.json",
+                    "bytes": 10,
+                    "sha256": "5" * 64,
+                },
+                "matrix_plan": {
+                    "basename": "matrix.json",
+                    "bytes": 10,
+                    "sha256": "6" * 64,
+                },
+            },
             "device": {
                 "type": "cuda",
                 "cuda_available": True,
@@ -136,11 +158,14 @@ def resign(raw: dict[str, object]) -> dict[str, object]:
     return add_raw_digest(payload)
 
 
-def test_valid_real_cuda_raw_metrics_recompute_keep() -> None:
+def test_self_asserted_real_cuda_bytes_recompute_keep_without_live_claim() -> None:
     raw = raw_fixture()
     result = evaluate_raw_result(raw, expected_config_sha256=str(raw["config_sha256"]))
 
-    assert result["gate_status"] == "PASS"
+    assert result["contract_gate_status"] == "PASS"
+    assert result["verification_status"] == "CONTRACT_PASS_ORIGIN_UNVERIFIED"
+    assert result["external_origin_status"] == "UNVERIFIED"
+    assert result["live_claim_allowed"] is False
     assert result["decision"] == "KEEP"
     assert result["sample_count"] == 32
     assert result["baseline_accuracy"] == 1.0
@@ -161,7 +186,8 @@ def test_scientific_failure_is_reject_not_execution_failure() -> None:
 
     result = evaluate_raw_result(raw)
 
-    assert result["gate_status"] == "PASS"
+    assert result["contract_gate_status"] == "PASS"
+    assert result["live_claim_allowed"] is False
     assert result["decision"] == "REJECT"
     assert result["accuracy_rule_pass"] is False
 

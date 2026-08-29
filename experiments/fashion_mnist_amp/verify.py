@@ -1,4 +1,8 @@
-"""Offline verifier for a frozen Fashion-MNIST real-GPU raw artifact."""
+"""Offline self-consistency verifier for a claimed Fashion-MNIST GPU artifact.
+
+This command recomputes the decision from supplied bytes. It cannot authenticate that
+those bytes originated from CUDA hardware, AgentTeams, or any external service.
+"""
 
 from __future__ import annotations
 
@@ -44,7 +48,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
-    output = canonical_bytes({"ok": True, "result": result}) + b"\n"
+    output = canonical_bytes(
+        {
+            "ok": True,
+            "verification_status": "CONTRACT_PASS_ORIGIN_UNVERIFIED",
+            "external_origin_status": "UNVERIFIED",
+            "live_claim_allowed": False,
+            "result": result,
+        }
+    ) + b"\n"
     if arguments.output is None:
         sys.stdout.buffer.write(output)
     else:
@@ -71,4 +83,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

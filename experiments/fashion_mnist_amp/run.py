@@ -43,16 +43,39 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_sha256(value: str, name: str) -> str:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-        raise ContractError(f"{name} must be a lowercase SHA-256 digest")
-    return value
-
-
 def _validate_identifier(value: str, name: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", value) is None:
         raise ContractError(f"{name} must match the bounded identifier contract")
     return value
+
+
+def _bound_file_record(value: str, name: str, *, json_object: bool) -> Dict[str, Any]:
+    """Read a caller-supplied binding artifact instead of trusting a digest argument."""
+
+    source = Path(value)
+    if source.is_symlink():
+        raise ContractError(f"{name} must not be a symlink")
+    try:
+        resolved = source.resolve(strict=True)
+    except OSError as error:
+        raise ContractError(f"{name} is missing") from error
+    if not resolved.is_file():
+        raise ContractError(f"{name} must be a regular file")
+    payload = resolved.read_bytes()
+    if not payload or len(payload) > 16 * 1024 * 1024:
+        raise ContractError(f"{name} must contain between 1 byte and 16 MiB")
+    if json_object:
+        try:
+            parsed = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ContractError(f"{name} must be a UTF-8 JSON object") from error
+        if not isinstance(parsed, dict):
+            raise ContractError(f"{name} must be a UTF-8 JSON object")
+    return {
+        "basename": resolved.name,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 
 def _prepare_output(path: Path) -> Path:
@@ -133,6 +156,9 @@ def _acceptance_metric_artifacts(raw: Dict[str, Any]) -> Tuple[bytes, Dict[str, 
         "mean_scaled_fraction": "%d/%d" % (mean.numerator, mean.denominator),
         "raw_metrics_sha256": "sha256:%s" % hashlib.sha256(raw_bytes).hexdigest(),
     }
+    degradation_limit = Fraction(
+        str(raw["config"]["comparison"]["max_accuracy_degradation"])
+    )
     contract = {
         "metric_name": "classification_correct",
         "scale": 1,
@@ -143,6 +169,15 @@ def _acceptance_metric_artifacts(raw: Dict[str, Any]) -> Tuple[bytes, Dict[str, 
             {"cell_id": "cell-candidate-amp", "seed": int(raw["config"]["seed"])},
         ],
         "declared_filters": [],
+        "decision_policy": {
+            "kind": "candidate_noninferiority",
+            "baseline_cell_id": "cell-baseline-fp32",
+            "candidate_cell_id": "cell-candidate-amp",
+            "max_degradation_scaled_fraction": "%d/%d"
+            % (degradation_limit.numerator, degradation_limit.denominator),
+            "pass_rationale_code": "ACCURACY_NONINFERIOR",
+            "fail_rationale_code": "ACCURACY_DEGRADED",
+        },
     }
     return raw_bytes, summary, contract
 
@@ -462,10 +497,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--git-commit", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--physical-launch-id", required=True)
-    parser.add_argument("--environment-lock-sha256", required=True)
-    parser.add_argument("--approval-receipt-sha256", required=True)
-    parser.add_argument("--agentteams-receipt-sha256", required=True)
-    parser.add_argument("--matrix-plan-sha256", required=True)
+    parser.add_argument("--environment-lock-file", required=True)
+    parser.add_argument("--approval-receipt-file", required=True)
+    parser.add_argument("--agentteams-receipt-file", required=True)
+    parser.add_argument("--matrix-plan-file", required=True)
     parser.add_argument(
         "--allow-download",
         action="store_true",
@@ -481,13 +516,20 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         raise ContractError(
             "config dataset.download and explicit --allow-download must agree"
         )
-    for field in (
-        "environment_lock_sha256",
-        "approval_receipt_sha256",
-        "agentteams_receipt_sha256",
-        "matrix_plan_sha256",
-    ):
-        _validate_sha256(str(getattr(arguments, field)), field)
+    binding_artifacts = {
+        "environment_lock": _bound_file_record(
+            str(arguments.environment_lock_file), "environment_lock_file", json_object=False
+        ),
+        "approval_receipt": _bound_file_record(
+            str(arguments.approval_receipt_file), "approval_receipt_file", json_object=True
+        ),
+        "agentteams_receipt": _bound_file_record(
+            str(arguments.agentteams_receipt_file), "agentteams_receipt_file", json_object=True
+        ),
+        "matrix_plan": _bound_file_record(
+            str(arguments.matrix_plan_file), "matrix_plan_file", json_object=True
+        ),
+    }
     run_id = _validate_identifier(str(arguments.run_id), "run_id")
     physical_launch_id = _validate_identifier(
         str(arguments.physical_launch_id), "physical_launch_id"
@@ -527,10 +569,11 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         "dataset_manifest_sha256": dataset_manifest_sha256,
         "git_commit": git_commit,
         "git_commit_sha256": hashlib.sha256(git_commit.encode("ascii")).hexdigest(),
-        "environment_lock_sha256": arguments.environment_lock_sha256,
-        "approval_receipt_sha256": arguments.approval_receipt_sha256,
-        "agentteams_receipt_sha256": arguments.agentteams_receipt_sha256,
-        "matrix_plan_sha256": arguments.matrix_plan_sha256,
+        "environment_lock_sha256": binding_artifacts["environment_lock"]["sha256"],
+        "approval_receipt_sha256": binding_artifacts["approval_receipt"]["sha256"],
+        "agentteams_receipt_sha256": binding_artifacts["agentteams_receipt"]["sha256"],
+        "matrix_plan_sha256": binding_artifacts["matrix_plan"]["sha256"],
+        "binding_artifacts": binding_artifacts,
         "device": device,
         "determinism": {
             "cublas_workspace_config": os.environ["CUBLAS_WORKSPACE_CONFIG"],
@@ -597,6 +640,8 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     return {
         "ok": True,
         "decision": decision["decision"],
+        "verification_status": decision["verification_status"],
+        "live_claim_allowed": decision["live_claim_allowed"],
         "output_dir": str(output_root),
         "raw_sha256": raw["raw_sha256"],
         "artifact_root": manifest["artifact_root"],
