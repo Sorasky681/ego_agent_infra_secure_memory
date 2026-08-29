@@ -13,7 +13,7 @@ Research Goal → Context → Hypothesis / Plan → Approval → Execution
 
 系统采用 **Deterministic Core + LLM Residual**：Agent 可以理解目标、提出假设和解释结果；状态迁移、风险策略、审批范围、指标计算、证据完整性、哈希与审计由确定性代码执行。Planner、Executor、Evaluator、Reviewer 相互分离，任何 Agent 都不能自证闭环。
 
-## 先运行
+## 复赛评委一键路径
 
 在线静态 Demo：[https://mythrise.github.io/ego_agent_infra/](https://mythrise.github.io/ego_agent_infra/)
 
@@ -29,7 +29,7 @@ VITE_STATIC_DEMO=true VITE_BASE_PATH=/ego_agent_infra/ npm --prefix apps/web run
 
 完整本地 API 模式与静态回放共用同一个 Research Cockpit：未强制设置 `VITE_STATIC_DEMO=true` 时，Web 会先连接 `VITE_API_ROOT`；只有在初始连接不可达时才自动降级为静态回放。一旦已连接本地 API，后续故障会显式报错，不会悄然切换成 fixture。
 
-本地评委复现只需要 Docker：
+本地评委复现的目标路径只需要 Docker：
 
 ```bash
 cp .env.example .env
@@ -45,6 +45,11 @@ docker compose up --build
 
 默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、PostgreSQL 16 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 PolarDB/PITR、AgentTeams、Nacos 或 Higress 在线状态。直接启动 API 且不设置 `EGO_DATABASE_URL` 时仍使用 SQLite 开发模式。
 
+截至 2026-08-29，本机已通过 `docker compose config` 和真实 PostgreSQL 16
+数据层的 10/10 集成测试；API/Web 镜像构建在拉取 Docker Hub metadata 时网络超时，
+因此本仓库不把这次 `docker compose up --build` 记作已验证镜像构建。评委网络可用时可
+直接走上述一键路径；原生启动路径不依赖镜像拉取：
+
 若不使用 Docker：
 
 ```bash
@@ -56,6 +61,19 @@ uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
 npm --prefix apps/web ci
 VITE_API_ROOT=http://127.0.0.1:8000/api/v1 npm --prefix apps/web run dev -- --port 4173
 ```
+
+启动后可先用新增协议与 Skill API 做 30 秒自检：
+
+```bash
+curl --fail http://127.0.0.1:8000/api/v1/rxp/schemas
+curl --fail http://127.0.0.1:8000/api/v1/rxp/demo
+curl --fail http://127.0.0.1:8000/api/v1/skills
+```
+
+`POST /api/v1/rxp/verify` 会重新校验上传 ledger 的 schema、因果链、root chain、
+Evidence Gate 与矩阵完整性；`POST /api/v1/skills/{name}/invoke` 支持 version/package
+digest pin，`GET /api/v1/skill-invocations/{invocation_id}` 返回关联 trace。完整可复制
+请求见 [评委复现手册](docs/demo-runbook.md)。
 
 ## 本地 API 模式：6 分钟 Judge Replay
 
@@ -83,7 +101,8 @@ flowchart TB
   CP --> A["Local deterministic role handlers\n7 Agent identity contracts"]
   CP --> DB["SQLite developer backend\nPostgreSQL 16 verified backend"]
   CP --> X["Explicitly synthetic EgoLite execution"]
-  S["6 versioned Skill contracts"] -. workflow contract .-> A
+  CP --> SR["In-process Skill runtime\n6 packages · 3 allowlisted handlers"]
+  S["Portable Skill contracts"] -. workflow contract .-> A
   T["4 MCP servers / 7 typed tools"] -. execution profile .-> CP
   AT["Official AgentTeams / Matrix\noptional live runtime"] -. Controller + TeamHarness .-> AB["Durable AgentTeams bridge\nreplan · R2 recovery · compensation"]
   AB -. validated artifacts .-> CP
@@ -91,7 +110,11 @@ flowchart TB
   NC["Nacos publish policy"] -. not deployed .-> S
 ```
 
-实线是当前本地运行路径；虚线是需显式配置的 execution profile。默认 Web replay 不调用 AgentTeams、Skill runtime 或 MCP，也不会把角色标签冒充成真实 Matrix 会话。仓库现已包含可执行的 AgentTeams bridge，但只有真实 Controller、Team、Worker、Matrix 和非 synthetic Ego task 全部握手成功时才标记 `live`。
+实线是当前本地运行路径；虚线是需显式配置的 execution profile。Skill runtime 可经
+本地 API 独立调用，但默认 Web replay 不调用 AgentTeams、Skill runtime 或 MCP，也
+不会把角色标签冒充成真实 Matrix 会话。仓库现已包含可执行的 AgentTeams bridge，
+但只有真实 Controller、Team、Worker、Matrix 和非 synthetic Ego task 全部握手成功时
+才标记 `live`。
 
 任务状态机固定为：
 
@@ -118,7 +141,7 @@ INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
 
 机器可读身份位于 [`agents/`](agents/)。官方 `agentteams.io/v1beta1` 资源、契约锁和结构化 envelope 位于 [`integrations/agentteams/`](integrations/agentteams/)，可执行 bridge 位于 [`apps/agentteams_bridge/`](apps/agentteams_bridge/)。AgentTeams/TeamHarness 负责真实协作，EgoAgentOS 仍负责审批、证据验收和最终决策；Matrix 不是授权源。
 
-## 6 个 Skill Package
+## 6 个 Skill Package 与可执行 Registry
 
 [`skills/`](skills/) 内含 `research-plan`、`dataset-manifest`、`safe-experiment-runner`、`ablation-analyzer`、`evidence-gate`、`research-memory`。每个包都有：
 
@@ -126,6 +149,14 @@ INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
 - typed inputs/outputs、触发条件和依赖；
 - 失败状态、风险/审批、幂等性与复用规则；
 - draft → review → publish 的诚实发布边界。
+
+本地 reference registry 对 `x.y.z` 版本做严格 SemVer 校验，以 `SKILL.md` 与 manifest
+的 canonical SHA-256 固定 package，支持 deterministic canary、activate、retire、
+rollback，并为每次调用绑定 correlation ID、input/output digest 与 package digest。
+其中 `research-plan`、`dataset-manifest`、`evidence-gate` 有可执行白名单 handler；其余
+三个包只可发现，调用时 fail closed。该 registry 当前为进程内实现，生命周期状态和
+trace 不会跨进程重启持久化，也不等于已发布到 Nacos。细节见
+[`skills/README.md`](skills/README.md)。
 
 ## 4 组 MCP / 7 个受限工具
 
@@ -158,10 +189,12 @@ API 与 GPU MCP 共享 [`contracts/approval-token-v1.json`](contracts/approval-t
 和 `missing_decisions`，因此不能只 cherry-pick 有利 cell 后声称矩阵完整。
 
 RXP 不替代 MCP、A2A/AgentTeams、Skill、W3C PROV-O 或 MLflow：这些系统可以
-承载、生成、映射或存储 RXP 文档；RXP 只负责实验承诺与验收的不变量。当前实现是
-独立可运行 reference package/CLI，尚未接入现有 FastAPI 持久化路径；现有 API 与
-GPU MCP 仍使用 `approval-token-v1`。仓库提供一个显式的一次性迁移 adapter，只有
-旧 token 已被验证并消费后才会重新签发 RXP Grant。
+承载、生成、映射或存储 RXP 文档；RXP 只负责实验承诺与验收的不变量。reference
+package/CLI 和 FastAPI 的 `/rxp/schemas`、`/rxp/demo`、`/rxp/verify` 已可执行；HTTP
+入口当前只生成显式 synthetic fixture 或验证上传文档，不把 RXP ledger 写入 task
+store，也不是分布式 transparency service。现有任务执行 API 与 GPU MCP 仍使用
+`approval-token-v1`。仓库提供一个显式的一次性迁移 adapter，只有旧 token 已被验证
+并消费后才会重新签发 RXP Grant。
 
 ```bash
 python -m protocols.rxp demo -o /tmp/rxp-a.json
@@ -199,6 +232,11 @@ Decision 前必须具备且校验七类证据：`code`、`config`、`dataset_man
 make install
 make test
 ```
+
+截至 **2026-08-29** 的当前提交快照为 **135 个测试**：API 29、RXP 26、Skills 6、
+Benchmark 20、AgentTeams 20、MCP 23、Web 11。这个数字是带日期的提交证据，不是
+永久承诺；后续提交应以实时 `make test` 与 CI 输出为准。PostgreSQL 10/10 是另一个
+需要真实数据库的集成套件，不计入上述默认 135。
 
 分项运行：
 
@@ -246,8 +284,9 @@ submission/               ≤500 字简介、答辩稿、演示与提交清单
 
 | Integration | 本仓库状态 | 不做的虚假声明 |
 |---|---|---|
-| AgentTeams | 可执行 Controller/Matrix bridge + 7 Worker/1 Team/1 Manager 资源 + 官方契约锁；默认未配置 | contract/fixture 测试不冒充 live；只有真实握手与 trace 才可升级 claim |
-| Nacos | Skill package + review/publish policy contract | 不声称 Skill 已上线 |
+| AgentTeams | 可执行 Controller/Matrix bridge + 7 Worker/1 Team/1 Manager 资源 + 官方契约锁；本机无 live 配置，target benchmark 诚实 `SKIP` | contract/fixture 测试不冒充 live；只有真实握手与 trace 才可升级 claim |
+| Nacos | 6 个 Skill package + 本地进程内 registry/lifecycle reference | 不声称 Skill 已上线或 rollout 状态已持久化 |
+| PostgreSQL / PolarDB-PG | 真实 PostgreSQL 16 合同测试 10/10 PASS | PolarDB 云部署、备份策略与 PITR 明确为 `NOT RUN` |
 | Higress | 精确 MCP route / credential policy contract | 不声称 gateway 已部署或完成 secret-isolation 负测 |
 | Aliyun SLS Skill | 只读官方 Skill 选择与 lock | 不声称已查询真实项目日志 |
 | GPU / EgoLite | synthetic fixtures + bounded launcher | 不声称跑过 8×RTX 4090 或真实数据 |
