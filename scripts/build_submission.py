@@ -16,13 +16,16 @@ DEFAULT_DIRS = (
     ".github",
     "agents",
     "apps",
+    "benchmarks",
     "contracts",
+    "deploy",
     "docs",
     "examples",
     "integrations",
     "mcp_servers",
     "protocols",
     "scripts",
+    "skill_runtime",
     "skills",
     "submission",
     "tests",
@@ -117,7 +120,7 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "submission" / "dist" / "EgoAgentOS_GOAI_Initial.zip",
+        default=ROOT / "submission" / "dist" / "EgoAgentOS_GOAI_Semifinal.zip",
     )
     args = parser.parse_args()
 

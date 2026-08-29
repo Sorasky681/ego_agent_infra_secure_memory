@@ -22,6 +22,7 @@ from .models import (
 from .provenance import canonical_sha256
 from .rxp_runtime import demo_ledger, schema_catalog, verify_uploaded_ledger
 from .service import ResearchOpsService
+from .skill_runtime_api import SkillInvokeRequest, create_skill_registry, invoke_skill
 from .store_factory import create_store
 from protocols.rxp import RXPError
 
@@ -110,9 +111,11 @@ def create_app(
     approval_hmac_secret: Optional[str] = None,
     *,
     database_url: Optional[str] = None,
+    skills_path: Optional[str] = None,
 ) -> FastAPI:
     store = create_store(database_url=database_url, sqlite_path=db_path)
     service = ResearchOpsService(store, approval_hmac_secret=approval_hmac_secret)
+    skill_registry = create_skill_registry(skills_path)
 
     application = FastAPI(
         title="EgoAgentOS ResearchOps API",
@@ -125,6 +128,7 @@ def create_app(
         redoc_url="/redoc",
     )
     application.state.service = service
+    application.state.skill_registry = skill_registry
 
     default_origins = ",".join(
         [
@@ -192,6 +196,34 @@ def create_app(
     @application.get("/api/v1/integrations", tags=["system"])
     def integrations(request: Request) -> Dict[str, Any]:
         return request.app.state.service.integrations()
+
+    @application.get("/api/v1/skills", tags=["skills"])
+    def skills(request: Request) -> Dict[str, Any]:
+        items = list(request.app.state.skill_registry.catalog())
+        return {
+            "items": items,
+            "total": len(items),
+            "executable": sum(bool(item["executable"]) for item in items),
+            "truth_boundary": (
+                "Discovery is not execution. Only allowlisted deterministic handlers can be "
+                "invoked here; SafeRunner remains behind its dedicated approval path."
+            ),
+        }
+
+    @application.get("/api/v1/skill-invocations/{invocation_id}", tags=["skills"])
+    def skill_trace(invocation_id: str, request: Request) -> Dict[str, Any]:
+        try:
+            return request.app.state.skill_registry.trace(invocation_id)
+        except KeyError as error:
+            raise ControlPlaneError("skill_trace_not_found", str(error), 404) from error
+
+    @application.post("/api/v1/skills/{name}/invoke", tags=["skills"])
+    def skill_invoke(
+        name: str,
+        body: SkillInvokeRequest,
+        request: Request,
+    ) -> Dict[str, Any]:
+        return invoke_skill(request.app.state.skill_registry, name, body)
 
     @application.get("/api/v1/rxp/schemas", tags=["rxp"])
     def rxp_schemas() -> Dict[str, Any]:
