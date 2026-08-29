@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -273,6 +274,15 @@ class DeterministicCoreProfile(Profile):
         now = datetime(2026, 8, 29, tzinfo=timezone.utc)
         approval, token, expected = self._approved_token(now)
         validate_approval_token(approval, token, now=now + timedelta(seconds=1), **expected)
+        effect_database = workspace / "token-replay-effects.sqlite3"
+        with sqlite3.connect(effect_database) as connection:
+            connection.execute(
+                "CREATE TABLE effects(idempotency_key TEXT PRIMARY KEY, payload_digest TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO effects(idempotency_key, payload_digest) VALUES (?, ?)",
+                ("token-replay-action", expected["expected_digest"]),
+            )
         consume_approval(approval, now + timedelta(seconds=2))
         blocked = False
         code = None
@@ -281,14 +291,20 @@ class DeterministicCoreProfile(Profile):
         except PolicyError as error:
             blocked = True
             code = error.code
+        with sqlite3.connect(effect_database) as connection:
+            action_effect_count = int(connection.execute("SELECT COUNT(*) FROM effects").fetchone()[0])
         return {
-            "status": "pass" if blocked and code == "approval_token_replayed" else "fail",
+            "status": (
+                "pass"
+                if blocked and code == "approval_token_replayed" and action_effect_count == 1
+                else "fail"
+            ),
             "operation_count": 2,
             "unsafe_action_blocked": blocked,
             "approval_bypass_succeeded": not blocked,
-            "exactly_once": blocked,
+            "exactly_once": blocked and action_effect_count == 1,
             "assertions": ["single-use token rejected on second presentation"],
-            "details": {"error_code": code},
+            "details": {"error_code": code, "action_effect_count": action_effect_count},
         }
 
     def _token_expiry(self, workspace: Path, seed: int) -> Dict[str, Any]:

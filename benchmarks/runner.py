@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Sequence, Type
 
 from benchmarks import BENCHMARK_VERSION
 from benchmarks.model import Observation, canonical_json, canonical_sha256, derive_seed, load_corpus
+from benchmarks.oracle import adjudicate
 from benchmarks.profiles import AgentTeamsRXPProfile, DeterministicCoreProfile, NaiveFixedProfile
 from benchmarks.profiles.base import Profile
 from benchmarks.report import render_markdown
@@ -76,9 +77,8 @@ def run_benchmark(
                     seed = derive_seed(master_seed, scenario.id, repetition)
                     trial_dir = temp_root / profile.name / scenario.id / str(repetition)
                     trial_dir.mkdir(parents=True, exist_ok=True)
-                    observations.append(
-                        profile.run(scenario, seed, repetition, trial_dir)
-                    )
+                    raw_observation = profile.run(scenario, seed, repetition, trial_dir)
+                    observations.append(adjudicate(scenario, raw_observation))
     summary = summarize(observations)
     semantic_projection = _semantic_projection(observations)
     return {
@@ -148,10 +148,14 @@ def release_gate_failures(
         if summary[status]:
             failures.append("release profile has %d %s trials" % (summary[status], status))
     success = summary["scenario_success"]
-    if success["n"] != expected_trials or success["successes"] != expected_trials:
+    expected_scenario_clusters = len(expected_scenarios)
+    if (
+        success["n"] != expected_scenario_clusters
+        or success["successes"] != expected_scenario_clusters
+    ):
         failures.append(
-            "release profile passed %d/%d required trials"
-            % (success["successes"], expected_trials)
+            "release profile passed %d/%d required scenario clusters"
+            % (success["successes"], expected_scenario_clusters)
         )
 
     status_by_scenario = summary.get("scenario_status", {})
@@ -186,6 +190,8 @@ def release_gate_failures(
     dynamic_scenarios = {"plan_conflict", "worker_timeout_reassign"}
     for trial in target_trials:
         label = "%s repetition %s" % (trial["scenario_id"], trial["repetition"])
+        if trial.get("status") != "pass":
+            continue
         if trial.get("trace_completeness") != 1.0:
             failures.append("%s lacks a complete correlated trace" % label)
         if trial.get("evidence_completeness") != 1.0:
@@ -236,7 +242,7 @@ def main(argv: Sequence[str] = ()) -> int:
     )
     args = parser.parse_args(list(argv) if argv else None)
     corpus = load_corpus()
-    repetitions = args.repetitions or corpus.default_repetitions
+    repetitions = corpus.default_repetitions if args.repetitions is None else args.repetitions
     master_seed = corpus.master_seed if args.seed is None else args.seed
     try:
         profiles = _parse_profiles(args.profiles)

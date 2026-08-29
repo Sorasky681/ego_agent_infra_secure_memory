@@ -6,7 +6,7 @@ import hashlib
 import math
 import random
 import statistics
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from benchmarks.model import Observation
 
@@ -52,6 +52,36 @@ def _proportion(values: Iterable[Optional[bool]]) -> Dict[str, Any]:
     }
 
 
+def _clustered_proportion(
+    observations: List[Observation],
+    selector: Callable[[Observation], Optional[bool]],
+    mode: str = "all",
+) -> Dict[str, Any]:
+    """Collapse repeated seeds within each scenario before estimating a rate."""
+
+    clusters: Dict[str, List[bool]] = {}
+    trial_n = 0
+    for observation in observations:
+        value = selector(observation)
+        if value is None:
+            continue
+        trial_n += 1
+        clusters.setdefault(observation.scenario_id, []).append(value)
+    if mode == "any":
+        collapsed = [any(values) for values in clusters.values()]
+    else:
+        collapsed = [all(values) for values in clusters.values()]
+    result = _proportion(collapsed)
+    result.update(
+        {
+            "trial_n": trial_n,
+            "independence_unit": "scenario",
+            "repetition_rule": "any" if mode == "any" else "all",
+        }
+    )
+    return result
+
+
 def _bootstrap_mean_ci(values: List[float], seed_material: str, samples: int = 2000) -> Any:
     if not values:
         return None
@@ -83,35 +113,45 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
     profiles: Dict[str, Any] = {}
     for profile_name in sorted({item.profile for item in observations}):
         all_trials = [item for item in observations if item.profile == profile_name]
-        executed = [item for item in all_trials if item.status not in {"skip", "error"}]
-        latency = [item.latency_ms for item in executed]
-        mttr = [item.mttr_ms for item in executed if item.mttr_ms is not None]
-        costs = [item.external_cost_usd for item in executed if item.external_cost_usd is not None]
+        attempted = [item for item in all_trials if item.status != "skip"]
+        measured = [item for item in attempted if item.status != "error"]
+        latency = [item.latency_ms for item in attempted]
+        mttr = [item.mttr_ms for item in measured if item.mttr_ms is not None]
+        costs = [item.external_cost_usd for item in measured if item.external_cost_usd is not None]
         profile_summary: Dict[str, Any] = {
             "trials": len(all_trials),
-            "executed": len(executed),
+            "executed": len(attempted),
             "skipped": sum(item.status == "skip" for item in all_trials),
             "errors": sum(item.status == "error" for item in all_trials),
-            "coverage": len(executed) / len(all_trials) if all_trials else 0.0,
-            "scenario_success": _proportion(
-                item.status == "pass" for item in executed
+            "failed": sum(item.status == "fail" for item in all_trials),
+            "coverage": len(attempted) / len(all_trials) if all_trials else 0.0,
+            "scenario_success": _clustered_proportion(
+                attempted, lambda item: item.status == "pass"
             ),
-            "task_completion": _proportion(item.task_completed for item in executed),
-            "unsafe_action_block": _proportion(
-                item.unsafe_action_blocked for item in executed
+            "task_completion": _clustered_proportion(
+                measured, lambda item: item.task_completed
             ),
-            "approval_bypass_success": _proportion(
-                item.approval_bypass_succeeded for item in executed
+            "unsafe_action_block": _clustered_proportion(
+                measured, lambda item: item.unsafe_action_blocked
             ),
-            "exactly_once": _proportion(item.exactly_once for item in executed),
-            "recovery": _proportion(item.recovered for item in executed),
-            "reproducibility": _proportion(item.reproducible for item in executed),
-            "hash_agreement": _proportion(item.hash_agreement for item in executed),
-            "dynamic_routing": _proportion(item.dynamically_routed for item in executed),
+            "approval_bypass_success": _clustered_proportion(
+                measured, lambda item: item.approval_bypass_succeeded, mode="any"
+            ),
+            "exactly_once": _clustered_proportion(measured, lambda item: item.exactly_once),
+            "recovery": _clustered_proportion(measured, lambda item: item.recovered),
+            "reproducibility": _clustered_proportion(
+                measured, lambda item: item.reproducible
+            ),
+            "hash_agreement": _clustered_proportion(
+                measured, lambda item: item.hash_agreement
+            ),
+            "dynamic_routing": _clustered_proportion(
+                measured, lambda item: item.dynamically_routed
+            ),
             "trace_completeness": _continuous(
                 [
                     item.trace_completeness
-                    for item in executed
+                    for item in measured
                     if item.trace_completeness is not None
                 ],
                 "%s:trace" % profile_name,
@@ -119,7 +159,7 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
             "evidence_completeness": _continuous(
                 [
                     item.evidence_completeness
-                    for item in executed
+                    for item in measured
                     if item.evidence_completeness is not None
                 ],
                 "%s:evidence" % profile_name,
@@ -127,7 +167,7 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
             "latency_ms": _continuous(latency, "%s:latency" % profile_name),
             "mttr_ms": _continuous(mttr, "%s:mttr" % profile_name),
             "operation_count": _continuous(
-                [float(item.operation_count) for item in executed],
+                [float(item.operation_count) for item in measured],
                 "%s:operations" % profile_name,
             ),
             "external_cost_usd": (
@@ -155,11 +195,12 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
     return {
         "confidence": {
             "level": 0.95,
-            "proportions": "Wilson score interval",
+            "proportions": "Wilson score interval after collapsing repetitions by scenario",
             "continuous_means": "fixed-seed nonparametric bootstrap, 2000 resamples",
             "interpretation": (
-                "Repeated trials measure implementation and local runtime stability for this "
-                "versioned synthetic corpus; they do not establish external-task generalization."
+                "The scenario is the independence unit. Repetitions are collapsed before "
+                "binary confidence intervals and measure stability only; they do not establish "
+                "external-task generalization."
             ),
         },
         "profiles": profiles,

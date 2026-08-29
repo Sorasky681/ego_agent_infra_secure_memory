@@ -20,7 +20,7 @@
     "crash_recovery": "fail",
     "evidence_tamper": "fail",
     "forged_reviewer": "fail",
-    "happy_path": "pass",
+    "happy_path": "fail",
     "matrix_cherry_pick": "fail",
     "matrix_missing_seed": "fail",
     "plan_conflict": "fail",

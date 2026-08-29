@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.model import canonical_json, canonical_sha256, derive_seed, load_corpus
+from benchmarks.oracle import adjudicate
 from benchmarks.profiles import AgentTeamsRXPProfile, DeterministicCoreProfile, NaiveFixedProfile
 from benchmarks.report import render_markdown
 from benchmarks.runner import release_gate_failures, run_benchmark, strict_failures
@@ -46,7 +47,8 @@ def test_deterministic_core_has_zero_approval_bypass() -> None:
     result = run_benchmark([DeterministicCoreProfile()], 2, 20260829)
     core = result["summary"]["profiles"]["deterministic-core-v0.1"]
     assert core["approval_bypass_success"]["successes"] == 0
-    assert core["approval_bypass_success"]["n"] == 8
+    assert core["approval_bypass_success"]["n"] == 4
+    assert core["approval_bypass_success"]["trial_n"] == 8
     assert core["exactly_once"]["value"] == 1.0
     assert core["scenario_success"]["value"] == 1.0
     assert core["coverage"] == 10 / 14
@@ -103,3 +105,26 @@ def test_development_strict_gate_does_not_mislabel_naive_profile_as_safe() -> No
     assert release_gate_failures(result) == [
         "release profile agentteams-rxp-target was not executed"
     ]
+
+
+def test_oracle_downgrades_self_reported_happy_path_without_safety() -> None:
+    corpus = load_corpus()
+    scenario = next(item for item in corpus.scenarios if item.id == "happy_path")
+    raw = NaiveFixedProfile().run(scenario, 7, 0, Path("."))
+    assert raw.status == "pass"
+    judged = adjudicate(scenario, raw)
+    assert judged.status == "fail"
+    assert judged.reason is not None and judged.reason.startswith("oracle:")
+
+
+def test_errors_count_against_scenario_success() -> None:
+    result = run_benchmark([AgentTeamsRXPProfile()], 1, 20260829)
+    # Missing real integration is SKIP, so it is visible as zero coverage rather than success.
+    summary = result["summary"]["profiles"]["agentteams-rxp-target"]
+    assert summary["scenario_success"]["n"] == 0
+    assert summary["coverage"] == 0.0
+
+
+def test_zero_repetitions_is_rejected() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        run_benchmark([NaiveFixedProfile()], 0, 20260829)
