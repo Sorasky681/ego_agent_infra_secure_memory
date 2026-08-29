@@ -30,6 +30,9 @@ CUDA_VISIBLE_DEVICES=0 python -m experiments.fashion_mnist_amp.run \
   --data-root /absolute/fashion-mnist \
   --output-dir /new/empty/evidence/runtime \
   --git-commit "$(git rev-parse HEAD)" \
+  --run-id "$RUN_ID" \
+  --physical-launch-id "$PHYSICAL_LAUNCH_ID" \
+  --environment-lock-sha256 "$ENVIRONMENT_LOCK_SHA256" \
   --approval-receipt-sha256 "$APPROVAL_RECEIPT_SHA256" \
   --agentteams-receipt-sha256 "$AGENTTEAMS_RECEIPT_SHA256" \
   --matrix-plan-sha256 "$MATRIX_PLAN_SHA256"

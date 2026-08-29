@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -257,8 +258,17 @@ def evaluate_raw_result(
         "approval_receipt_sha256",
         "agentteams_receipt_sha256",
         "matrix_plan_sha256",
+        "environment_lock_sha256",
+        "trained_model_sha256",
     ):
         _require(_is_sha256(raw.get(digest_name)), f"{digest_name} is invalid")
+    for identifier_name in ("run_id", "physical_launch_id"):
+        identifier = raw.get(identifier_name)
+        _require(
+            isinstance(identifier, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", identifier) is not None,
+            f"{identifier_name} is invalid",
+        )
 
     device = raw.get("device")
     _require(isinstance(device, dict), "device evidence is missing")

@@ -80,6 +80,8 @@ def raw_fixture() -> dict[str, object]:
             "execution_mode": "real_cuda",
             "synthetic": False,
             "physical_launch_count": 1,
+            "run_id": "run-live-0001",
+            "physical_launch_id": "gpu-launch-0001",
             "cpu_fallback_used": False,
             "workload_id": "fashion-mnist-amp-v1",
             "config": config,
@@ -88,6 +90,7 @@ def raw_fixture() -> dict[str, object]:
             "dataset_manifest_sha256": "2" * 64,
             "git_commit": "a" * 40,
             "git_commit_sha256": "3" * 64,
+            "environment_lock_sha256": "7" * 64,
             "approval_receipt_sha256": "4" * 64,
             "agentteams_receipt_sha256": "5" * 64,
             "matrix_plan_sha256": "6" * 64,
@@ -110,6 +113,7 @@ def raw_fixture() -> dict[str, object]:
                 "candidate": [7.0, 7.2, 7.1, 6.9, 7.0],
             },
             "max_memory_bytes": {"baseline": 1024, "candidate": 768},
+            "trained_model_sha256": "8" * 64,
         }
     )
 

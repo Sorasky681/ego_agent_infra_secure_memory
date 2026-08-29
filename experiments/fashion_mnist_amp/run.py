@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -40,6 +41,12 @@ def _sha256_file(path: Path) -> str:
 def _validate_sha256(value: str, name: str) -> str:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ContractError(f"{name} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _validate_identifier(value: str, name: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", value) is None:
+        raise ContractError(f"{name} must match the bounded identifier contract")
     return value
 
 
@@ -207,6 +214,16 @@ def _run_torch_workload(
             optimizer.step()
         _trace_event(events, "training.epoch.completed", {"epoch": epoch + 1})
 
+    model_digest = hashlib.sha256()
+    for name, tensor in sorted(model.state_dict().items()):
+        value = tensor.detach().cpu().contiguous()
+        model_digest.update(name.encode("utf-8") + b"\0")
+        model_digest.update(str(value.dtype).encode("ascii") + b"\0")
+        model_digest.update(canonical_bytes(list(value.shape)) + b"\0")
+        model_digest.update(value.numpy().tobytes(order="C"))
+    trained_model_sha256 = model_digest.hexdigest()
+    _trace_event(events, "model.frozen", {"trained_model_sha256": trained_model_sha256})
+
     model.eval()
     samples: List[Dict[str, int]] = []
     sample_offset = 0
@@ -271,6 +288,7 @@ def _run_torch_workload(
         "cudnn_version": int(torch.backends.cudnn.version() or 0),
     }
     metrics = {
+        "trained_model_sha256": trained_model_sha256,
         "samples": samples,
         "latency_ms": {"baseline": baseline_latency, "candidate": candidate_latency},
         "max_memory_bytes": {"baseline": baseline_memory, "candidate": candidate_memory},
@@ -284,6 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--git-commit", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--physical-launch-id", required=True)
+    parser.add_argument("--environment-lock-sha256", required=True)
     parser.add_argument("--approval-receipt-sha256", required=True)
     parser.add_argument("--agentteams-receipt-sha256", required=True)
     parser.add_argument("--matrix-plan-sha256", required=True)
@@ -303,11 +324,16 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
             "config dataset.download and explicit --allow-download must agree"
         )
     for field in (
+        "environment_lock_sha256",
         "approval_receipt_sha256",
         "agentteams_receipt_sha256",
         "matrix_plan_sha256",
     ):
         _validate_sha256(str(getattr(arguments, field)), field)
+    run_id = _validate_identifier(str(arguments.run_id), "run_id")
+    physical_launch_id = _validate_identifier(
+        str(arguments.physical_launch_id), "physical_launch_id"
+    )
     git_commit = str(arguments.git_commit).lower()
     if len(git_commit) not in (40, 64) or any(
         character not in "0123456789abcdef" for character in git_commit
@@ -331,6 +357,8 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         "execution_mode": "real_cuda",
         "synthetic": False,
         "physical_launch_count": 1,
+        "run_id": run_id,
+        "physical_launch_id": physical_launch_id,
         "cpu_fallback_used": False,
         "workload_id": config["workload_id"],
         "config": config,
@@ -339,6 +367,7 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         "dataset_manifest_sha256": dataset_manifest_sha256,
         "git_commit": git_commit,
         "git_commit_sha256": hashlib.sha256(git_commit.encode("ascii")).hexdigest(),
+        "environment_lock_sha256": arguments.environment_lock_sha256,
         "approval_receipt_sha256": arguments.approval_receipt_sha256,
         "agentteams_receipt_sha256": arguments.agentteams_receipt_sha256,
         "matrix_plan_sha256": arguments.matrix_plan_sha256,
