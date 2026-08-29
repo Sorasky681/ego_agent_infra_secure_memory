@@ -27,6 +27,7 @@ dev = [
 rxp-bench = "benchmarks.runner:main"
 rxp = "protocols.rxp.cli:main"
 ego-real-gpu-verify = "experiments.fashion_mnist_amp.verify:main"
+ego-semifinal-bundle = "semifinal_acceptance.cli:main"
 
 [tool.setuptools.packages.find]
 include = [
@@ -36,6 +37,7 @@ include = [
   "experiments*",
   "integrations*",
   "protocols*",
+  "semifinal_acceptance*",
   "skill_runtime*",
   "skills*",
 ]
@@ -46,11 +48,12 @@ namespaces = true
 "benchmarks" = ["corpus/v1/*.json", "schemas/*.json"]
 "integrations.agentteams" = ["*.json", "*.yaml", "*.tmpl", "scripts/*.py"]
 "protocols.rxp" = ["schemas/*.json"]
+"semifinal_acceptance" = ["schemas/*.json", "README.md"]
 "skills" = ["*/SKILL.md", "*/egoagentos.skill.yaml", "*/scripts/*.py"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests/api", "tests/agentteams", "tests/benchmarks", "tests/experiments", "tests/protocols", "tests/skills"]
+testpaths = ["tests/api", "tests/agentteams", "tests/acceptance", "tests/benchmarks", "tests/experiments", "tests/protocols", "tests/skills"]
 pythonpath = ["."]
 
 [tool.ruff]

@@ -2,7 +2,7 @@ PYTHON ?= python3
 UV ?= uv
 API_URL ?= http://127.0.0.1:8000
 
-.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-proof test-postgres check-api test-benchmark benchmark benchmark-release demo-proof test-agentteams check-agentteams test-experiments test-web test-mcp verify openapi up down logs package
+.PHONY: install install-api install-mcp install-web test test-api test-rxp test-skills test-proof test-postgres test-acceptance check-api test-benchmark benchmark benchmark-release demo-proof test-agentteams check-agentteams test-experiments test-web test-mcp verify openapi up down logs package
 
 install: install-api install-mcp install-web
 
@@ -15,7 +15,7 @@ install-mcp:
 install-web:
 	npm --prefix apps/web ci
 
-test: test-api test-rxp test-skills test-proof check-api test-benchmark test-agentteams check-agentteams test-experiments test-mcp test-web verify
+test: test-api test-rxp test-skills test-proof check-api test-benchmark test-acceptance test-agentteams check-agentteams test-experiments test-mcp test-web verify
 
 test-api:
 	$(UV) run --python 3.9 --extra dev pytest tests/api
@@ -44,6 +44,11 @@ test-benchmark:
 	$(UV) run --python 3.9 --extra dev ruff check benchmarks tests/benchmarks
 	$(UV) run --python 3.9 --extra dev mypy benchmarks
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --repetitions 2 --strict --output-json /tmp/rxp-bench-ci.json --output-md /tmp/rxp-bench-ci.md
+
+test-acceptance:
+	$(UV) run --python 3.9 --extra dev pytest tests/acceptance
+	$(UV) run --python 3.9 --extra dev ruff check semifinal_acceptance tests/acceptance
+	$(UV) run --python 3.9 --extra dev mypy semifinal_acceptance
 
 benchmark:
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --strict
