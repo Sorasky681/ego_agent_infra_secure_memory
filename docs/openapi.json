@@ -148,6 +148,65 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "RXPVerifyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ledger": {
+            "additionalProperties": true,
+            "title": "Ledger",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ledger"
+        ],
+        "title": "RXPVerifyRequest",
+        "type": "object"
+      },
+      "SkillInvokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "expected_package_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Package Digest"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "correlation_id",
+          "payload"
+        ],
+        "title": "SkillInvokeRequest",
+        "type": "object"
+      },
       "Stage": {
         "enum": [
           "INTAKE",
@@ -413,6 +472,217 @@
         "summary": "Integrations",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/rxp/demo": {
+      "get": {
+        "operationId": "rxp_demo_api_v1_rxp_demo_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rxp Demo Api V1 Rxp Demo Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rxp Demo",
+        "tags": [
+          "rxp",
+          "demo"
+        ]
+      }
+    },
+    "/api/v1/rxp/schemas": {
+      "get": {
+        "operationId": "rxp_schemas_api_v1_rxp_schemas_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rxp Schemas Api V1 Rxp Schemas Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rxp Schemas",
+        "tags": [
+          "rxp"
+        ]
+      }
+    },
+    "/api/v1/rxp/verify": {
+      "post": {
+        "operationId": "rxp_verify_api_v1_rxp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RXPVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rxp Verify Api V1 Rxp Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rxp Verify",
+        "tags": [
+          "rxp"
+        ]
+      }
+    },
+    "/api/v1/skill-invocations/{invocation_id}": {
+      "get": {
+        "operationId": "skill_trace_api_v1_skill_invocations__invocation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Skill Trace Api V1 Skill Invocations  Invocation Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Skill Trace",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/skills": {
+      "get": {
+        "operationId": "skills_api_v1_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Skills Api V1 Skills Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/skills/{name}/invoke": {
+      "post": {
+        "operationId": "skill_invoke_api_v1_skills__name__invoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInvokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Skill Invoke Api V1 Skills  Name  Invoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Skill Invoke",
+        "tags": [
+          "skills"
         ]
       }
     },

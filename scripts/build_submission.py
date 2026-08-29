@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
 import zipfile
@@ -134,11 +135,15 @@ def main() -> int:
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in files:
             info = zipfile.ZipInfo(path.relative_to(ROOT).as_posix())
-            info.date_time = (2026, 8, 9, 0, 0, 0)
+            info.date_time = (2026, 8, 29, 0, 0, 0)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes())
+    checksum = hashlib.sha256(output.read_bytes()).hexdigest()
+    checksum_path = output.with_suffix(output.suffix + ".sha256")
+    checksum_path.write_text("%s  %s\n" % (checksum, output.name), encoding="ascii")
     print("wrote %s (%d files)" % (output, len(files)))
+    print("sha256 %s" % checksum)
     return 0
 
 

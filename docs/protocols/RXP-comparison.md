@@ -16,8 +16,8 @@ ontology，也不是 MLflow Tracking 的运行记录平台。它可以被这些�
 
 | 系统 | 官方定位 | 本文使用的官方来源 |
 |---|---|---|
-| MCP | LLM 应用与外部 data/tools 连接的 client-server protocol；以 JSON-RPC、capability negotiation、resources、prompts、tools 为核心 | [MCP Specification 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18) |
-| A2A | 让独立、可能 opaque 的 Agent 通过 Agent Card、Message、stateful Task、Part、Artifact、streaming/push 互操作 | [A2A specification](https://github.com/a2aproject/A2A/blob/main/docs/specification.md) |
+| MCP | LLM 应用与外部 data/tools 连接的 client-server protocol；以 JSON-RPC、capability negotiation、resources、prompts、tools 为核心 | [MCP Specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25) |
+| A2A | 让独立、可能 opaque 的 Agent 通过 Agent Card、Message、stateful Task、Part、Artifact、streaming/push 互操作 | [A2A specification](https://a2a-protocol.org/latest/specification/) |
 | PROV-O | W3C PROV data model 的 OWL2 ontology，用 Entity、Activity、Agent 及关系表达和交换 provenance | [W3C PROV-O Recommendation](https://www.w3.org/TR/prov-o/) |
 | MLflow Tracking | 记录和查询 runs、parameters、metrics、code version 与 artifacts 的 API/UI 和存储模型 | [MLflow Tracking documentation](https://mlflow.org/docs/latest/ml/tracking/) |
 | RXP/1 | 本项目的矩阵级实验 commitment、per-cell authorization、evidence acceptance 与 omission proof | [RXP/1 reference specification](RXP.md) |

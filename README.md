@@ -233,10 +233,10 @@ make install
 make test
 ```
 
-截至 **2026-08-29** 的当前提交快照为 **135 个测试**：API 29、RXP 26、Skills 6、
-Benchmark 20、AgentTeams 20、MCP 23、Web 11。这个数字是带日期的提交证据，不是
+截至 **2026-08-29** 的当前提交快照为 **136 个测试**：API 29、RXP 26、Skills 6、
+Semifinal proof 1、Benchmark 20、AgentTeams 20、MCP 23、Web 11。这个数字是带日期的提交证据，不是
 永久承诺；后续提交应以实时 `make test` 与 CI 输出为准。PostgreSQL 10/10 是另一个
-需要真实数据库的集成套件，不计入上述默认 135。
+需要真实数据库的集成套件，不计入上述默认 136。
 
 分项运行：
 

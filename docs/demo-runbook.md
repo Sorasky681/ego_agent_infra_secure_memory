@@ -157,8 +157,8 @@ The deterministic core recorded 50 PASS and 20 capability SKIP trials. The scrip
 negative control recorded 70 deliberate FAIL trials. With no live AgentTeams target
 configured, all 70 target trials are `SKIP`, never PASS.
 
-The dated default-suite snapshot is 135 tests: API 29, RXP 26, Skills 6, Benchmark 20,
-AgentTeams 20, MCP 23, and Web 11. Re-run instead of treating that number as permanent:
+The dated default-suite snapshot is 136 tests: API 29, RXP 26, Skills 6, semifinal proof 1,
+Benchmark 20, AgentTeams 20, MCP 23, and Web 11. Re-run instead of treating that number as permanent:
 
 ```bash
 make test

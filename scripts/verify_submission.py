@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Dict, List
 
@@ -50,10 +51,12 @@ REQUIRED_DELIVERABLES = (
     "benchmarks/artifacts/2026-08-29-local-cpu.json",
     "benchmarks/artifacts/2026-08-29-local-cpu.md",
     "benchmarks/artifacts/2026-08-29-local-cpu.sha256",
+    "benchmarks/schemas/agentteams-rxp-trace-v1.schema.json",
     "benchmarks/trace-contract.md",
     "contracts/approval-token-v1.json",
     "docker-compose.yml",
     "docs/evidence/postgres-local-proof-2026-08-29.md",
+    "docs/semifinal-scorecard.md",
     "docs/protocols/RXP.md",
     "docs/openapi.json",
     "integrations/agentteams/official-contract.lock.json",
@@ -74,9 +77,15 @@ REQUIRED_DELIVERABLES = (
     "skill_runtime/registry.py",
     "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pdf",
     "submission/EgoAgentOS_GOAI_Agent_Infra_初赛方案.pptx",
+    "submission/EgoAgentOS_GOAI_Agent_Infra_复赛方案.pdf",
+    "submission/EgoAgentOS_GOAI_Agent_Infra_复赛方案.pptx",
+    "submission/demo-script-8min.md",
     "submission/evidence/semifinal-local-proof.json",
     "submission/evidence/semifinal-local-proof.sha256",
     "submission/project-summary-zh.txt",
+    "submission/screenshots/semifinal-rxp-cockpit.png",
+    "submission/semifinal-evidence-index.md",
+    "submission/semifinal-submission-checklist.md",
     "submission/verification-report.md",
     "uv.lock",
 )
@@ -168,6 +177,50 @@ def validate_required_deliverables(failures: List[str]) -> None:
     if pdf.is_file():
         check(pdf.stat().st_size > 10_000, "proposal PDF is unexpectedly small", failures)
         check(pdf.read_bytes()[:5] == b"%PDF-", "proposal PDF signature is invalid", failures)
+
+
+def validate_semifinal_artifacts(failures: List[str]) -> None:
+    pptx = ROOT / "submission" / "EgoAgentOS_GOAI_Agent_Infra_复赛方案.pptx"
+    pdf = ROOT / "submission" / "EgoAgentOS_GOAI_Agent_Infra_复赛方案.pdf"
+    screenshot = ROOT / "submission" / "screenshots" / "semifinal-rxp-cockpit.png"
+    index = ROOT / "submission" / "semifinal-evidence-index.md"
+    if pptx.is_file():
+        check(pptx.stat().st_size > 500_000, "semifinal PPTX is unexpectedly small", failures)
+        check(pptx.read_bytes()[:2] == b"PK", "semifinal PPTX signature is invalid", failures)
+        try:
+            with zipfile.ZipFile(pptx) as archive:
+                names = set(archive.namelist())
+                slide_count = sum(
+                    bool(re.fullmatch(r"ppt/slides/slide\d+\.xml", name)) for name in names
+                )
+                note_count = sum(
+                    bool(re.fullmatch(r"ppt/notesSlides/notesSlide\d+\.xml", name))
+                    for name in names
+                )
+                check(slide_count == 16, "semifinal PPTX must contain 16 slides", failures)
+                check(note_count == 16, "semifinal PPTX must contain 16 notes slides", failures)
+        except zipfile.BadZipFile:
+            failures.append("semifinal PPTX is not a readable OOXML archive")
+    if pdf.is_file():
+        check(pdf.stat().st_size > 500_000, "semifinal PDF is unexpectedly small", failures)
+        check(pdf.read_bytes()[:5] == b"%PDF-", "semifinal PDF signature is invalid", failures)
+    if screenshot.is_file():
+        check(screenshot.stat().st_size > 100_000, "semifinal screenshot is unexpectedly small", failures)
+        check(
+            screenshot.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n",
+            "semifinal screenshot signature is invalid",
+            failures,
+        )
+    if index.is_file():
+        content = read_text(index)
+        for path, label in (
+            (pptx, "Semifinal PPTX"),
+            (pdf, "Semifinal PDF"),
+            (screenshot, "Cockpit screenshot"),
+        ):
+            if path.is_file():
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                check(digest in content, "%s SHA-256 is stale in evidence index" % label, failures)
 
 
 def validate_semifinal_proof(failures: List[str]) -> None:
@@ -269,12 +322,13 @@ def main() -> int:
     validate_truth_labels(failures)
     validate_shared_contracts(failures)
     validate_required_deliverables(failures)
+    validate_semifinal_artifacts(failures)
     validate_semifinal_proof(failures)
     scan_secrets(failures)
 
     result: Dict[str, object] = {
         "status": "PASS" if not failures else "FAIL",
-        "checks": 9,
+        "checks": 10,
         "failures": failures,
     }
     if args.json:

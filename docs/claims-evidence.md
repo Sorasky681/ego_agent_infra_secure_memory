@@ -5,11 +5,11 @@ evidence URI is produced by the current repository and replayed successfully.
 
 ## Verification snapshot, 2026-08-29
 
-The default cross-component suite at this snapshot contains **135 tests**: API 29,
-RXP 26, Skills 6, Benchmark 20, AgentTeams 20, MCP 23, and Web 11. This count is a
+The default cross-component suite at this snapshot contains **136 tests**: API 29,
+RXP 26, Skills 6, semifinal proof 1, Benchmark 20, AgentTeams 20, MCP 23, and Web 11. This count is a
 dated commit snapshot, not a rolling promise. After any change, live `make test` and
 CI output are authoritative. The PostgreSQL suite is listed separately because it
-requires an explicit real database URL and is not included in the default 135.
+requires an explicit real database URL and is not included in the default 136.
 
 | Claim | Current state | Required evidence |
 |---|---|---|
