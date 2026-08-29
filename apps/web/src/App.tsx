@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { researchApi } from "./api";
+import { researchApi, taskEventStreamUrl } from "./api";
 import { syntheticDashboard } from "./demoData";
 import { syntheticRXP } from "./rxpDemoData";
 import { STAGES } from "./types";
@@ -174,10 +174,48 @@ function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!autoRefresh || !dashboard) return;
-    const interval = window.setInterval(() => void load(true), 10_000);
-    return () => window.clearInterval(interval);
-  }, [autoRefresh, dashboard, load]);
+    if (
+      !autoRefresh
+      || !activeTask
+      || dashboard?.runtimeMode === "static_replay"
+    ) return;
+
+    let fallbackInterval: number | undefined;
+    let debounceTimer: number | undefined;
+    let connectionTimer: number | undefined;
+    const startFallback = () => {
+      if (fallbackInterval !== undefined) return;
+      // LISTEN/NOTIFY is a wake-up, while a sparse reconciliation remains the
+      // durable safety net for proxies that cannot carry Server-Sent Events.
+      fallbackInterval = window.setInterval(() => void load(true), 30_000);
+    };
+    if (!("EventSource" in window)) {
+      startFallback();
+      return () => window.clearInterval(fallbackInterval);
+    }
+
+    const source = new EventSource(taskEventStreamUrl(activeTask.id));
+    connectionTimer = window.setTimeout(startFallback, 5_000);
+    source.onopen = () => {
+      window.clearTimeout(connectionTimer);
+      if (fallbackInterval !== undefined) {
+        window.clearInterval(fallbackInterval);
+        fallbackInterval = undefined;
+      }
+    };
+    source.onmessage = () => {
+      window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => void load(true), 120);
+    };
+    source.onerror = () => startFallback();
+
+    return () => {
+      source.close();
+      window.clearTimeout(connectionTimer);
+      window.clearTimeout(debounceTimer);
+      window.clearInterval(fallbackInterval);
+    };
+  }, [activeTask?.id, autoRefresh, dashboard?.runtimeMode, load]);
 
   const runAction = async (action: Exclude<BusyAction, null>, callback: () => Promise<unknown>, success: string) => {
     setBusy(action);

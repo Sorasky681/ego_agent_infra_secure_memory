@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.errors import ConflictError, ControlPlaneError
+from apps.api.event_stream import iter_task_events
 from apps.api.main import create_app
 from apps.api.models import ApprovalStatus, Stage
 from apps.api.postgres_store import PostgresStore, STAGE_EVENT_CHANNEL
@@ -253,6 +254,40 @@ def test_notify_is_commit_ordered_and_rollback_is_silent(postgres_url: str) -> N
     events = store.list_events(task.id, task.generation, limit=1000)
     assert len(events) == before + 1
     assert not any(event.event_type == "notify.rolled_back" for event in events)
+
+
+def test_event_stream_replays_from_durable_cursor_after_postgres_wakeup(
+    postgres_url: str,
+) -> None:
+    store = PostgresStore(postgres_url)
+    service = ResearchOpsService(store)
+    task = store.get_task(DEMO_TASK_ID)
+    existing = store.list_events(task.id, task.generation, limit=1000)
+    cursor = "%s:%s" % (task.generation, existing[-1].sequence)
+    stream = iter_task_events(
+        service,
+        task.id,
+        cursor=cursor,
+        follow=True,
+        heartbeat_seconds=0.05,
+        max_events=1,
+    )
+
+    # Advancing the generator opens LISTEN before querying the durable cursor. With no
+    # new row it emits only a keep-alive, proving the test did not consume old evidence.
+    assert next(stream) == b": keep-alive\n\n"
+    committed = store.append_event(
+        task.id,
+        task.generation,
+        "stream.wakeup.committed",
+        "runtime-agent",
+        task.stage,
+        {"commit": True},
+    )
+    chunk = next(stream).decode("utf-8")
+    assert "id: %s:%s" % (task.generation, committed.sequence) in chunk
+    assert '"delivery":"durable_replay"' in chunk
+    assert committed.event_hash in chunk
 
 
 def test_migrations_replay_cleanly_and_idempotent_requests_execute_once(postgres_url: str) -> None:

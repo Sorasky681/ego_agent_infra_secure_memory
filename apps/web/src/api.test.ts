@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createResearchApi, normalizeDashboard, normalizeRXP } from "./api";
+import { createResearchApi, normalizeDashboard, normalizeRXP, taskEventStreamUrl } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("backend contract normalization", () => {
+  it("builds a same-origin event stream URL with an encoded task id", () => {
+    expect(taskEventStreamUrl("task/a b")).toBe("/api/v1/tasks/task%2Fa%20b/event-stream");
+  });
+
   it("maps the deterministic API envelope without turning configured metadata into a live claim", () => {
     const dashboard = normalizeDashboard({
       demo: { task_id: "ego-lite-001", synthetic: true },

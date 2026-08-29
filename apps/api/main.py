@@ -9,9 +9,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .errors import ControlPlaneError
+from .event_stream import iter_task_events
 from .models import (
     AdvanceRequest,
     ApprovalDecisionRequest,
@@ -345,6 +347,40 @@ def create_app(
         limit: int = Query(default=200, ge=1, le=1000),
     ) -> Dict[str, Any]:
         return request.app.state.service.events(task_id, after_sequence, limit)
+
+    @application.get("/api/v1/tasks/{task_id}/event-stream", tags=["audit"])
+    def task_event_stream(
+        task_id: str,
+        request: Request,
+        after_sequence: int = Query(default=0, ge=0),
+        follow: bool = Query(default=True),
+        heartbeat_seconds: float = Query(default=15.0, ge=0.05, le=60.0),
+        last_event_id: Optional[str] = Header(default=None, alias="Last-Event-ID"),
+    ) -> StreamingResponse:
+        # Resolve the task before constructing a streaming response so a missing task
+        # remains a normal structured 404 instead of a late iterator failure.
+        request.app.state.service.store.get_task(task_id)
+        stream = iter_task_events(
+            request.app.state.service,
+            task_id,
+            cursor=last_event_id,
+            after_sequence=after_sequence,
+            follow=follow,
+            heartbeat_seconds=heartbeat_seconds,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "X-Ego-Event-Mode": (
+                    "postgres-listen-notify-durable-replay"
+                    if request.app.state.service.store.engine == "postgresql"
+                    else "sqlite-cursor-fallback"
+                ),
+            },
+        )
 
     return application
 

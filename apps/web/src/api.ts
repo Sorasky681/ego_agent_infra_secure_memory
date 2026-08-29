@@ -30,6 +30,10 @@ class ApiError extends Error {
   }
 }
 
+export function taskEventStreamUrl(taskId: string): string {
+  return `${API_ROOT}/tasks/${encodeURIComponent(taskId)}/event-stream`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
     ...init,
