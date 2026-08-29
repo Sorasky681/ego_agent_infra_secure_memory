@@ -469,7 +469,7 @@ def test_verified_benchmark_trace_has_required_real_agentteams_evidence(
     assert {
         "unsafe_action.blocked",
         "effect.committed",
-        "effect.replayed",
+        "replay.run_ids+semantic_digests",
     } <= set(trace["scenario_proof"]["missing_event_types"])
     relative_path, digest = _write_trace(tmp_path, trace)
     assert relative_path == "agentteams-live-trace.json"

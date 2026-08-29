@@ -165,14 +165,18 @@ bytes. The trace must contain at least three agents and ordered events for task
 creation, delegation, acceptance, Skill/tool invocation, human approval,
 completion, independent review, and final decision, plus RXP correlation
 digests and official response identifiers. It also contains `principals` for
-the bridge, human, and Ego decision actor, and `scenario_proof`.
+the bridge, human, and Ego decision actor. The benchmark-owned normative schema
+is `benchmarks/schemas/agentteams-rxp-trace-v1.schema.json`; semantic authority
+belongs to `benchmarks.trace_verifier.verify_trace_bytes`, not an adapter
+boolean or a second integration-local schema.
 
-The 14 canonical scenarios are fail-closed: each needs its own fault/replay
-events. Even `happy_path` additionally needs a blocked unsafe action, exactly
-one committed effect, and two replay observations with the same semantic
-digest. A generic successful terminal run cannot satisfy another scenario and
-is returned as `error` with the missing event types. Contract fixtures never
-produce `execution_mode=real-agentteams`.
+The 14 canonical scenarios are fail-closed: each needs its own fault events.
+Every PASS also needs top-level `replay.run_ids` and
+`replay.semantic_digests` for at least two distinct live runs whose semantic
+digests agree. Even `happy_path` additionally needs a blocked unsafe action and
+exactly one committed effect. A generic successful terminal run cannot satisfy
+another scenario and is returned as `error` with the missing event types.
+Contract fixtures never produce `execution_mode=real-agentteams`.
 
 If any item is absent, the correct benchmark result is `ERROR` or `SKIP`, not a
 synthetic PASS.

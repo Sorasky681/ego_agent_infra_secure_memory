@@ -24,6 +24,7 @@ from apps.agentteams_bridge.models import (
     StartRunRequest,
     canonical_sha256,
 )
+from benchmarks.trace_verifier import COMMON_EVENT_TYPES, SCENARIO_REQUIRED_EVENTS
 
 
 def _value(scenario: Any, name: str, default: Any = None) -> Any:
@@ -34,44 +35,10 @@ def _value(scenario: Any, name: str, default: Any = None) -> Any:
 
 TRACE_SCHEMA_VERSION = "egoagentos.agentteams-trace/v1"
 BENCHMARK_ADAPTER_VERSION = "rxp-bench/v1"
-REQUIRED_TRACE_EVENTS = {
-    "task.created",
-    "task.delegated",
-    "task.accepted",
-    "skill.invoked",
-    "human.approved",
-    "task.completed",
-    "independent_review.passed",
-    "decision.committed",
-}
-
+REQUIRED_TRACE_EVENTS = set(COMMON_EVENT_TYPES)
 CANONICAL_SCENARIO_EVENTS = {
-    "happy_path": {
-        "unsafe_action.blocked",
-        "effect.committed",
-        "effect.replayed",
-    },
-    "plan_conflict": {
-        "plan.conflict_detected",
-        "plan.replanned",
-        "unsafe_action.blocked",
-    },
-    "worker_timeout_reassign": {
-        "worker.timeout",
-        "task.reassigned",
-        "task.completed",
-    },
-    "stale_context": {"context.stale_rejected", "unsafe_action.blocked"},
-    "token_replay": {"grant.replay", "unsafe_action.blocked"},
-    "token_expiry": {"grant.expired", "unsafe_action.blocked"},
-    "token_scope_mismatch": {"grant.scope_rejected", "unsafe_action.blocked"},
-    "concurrent_duplicate": {"effect.committed", "effect.deduplicated"},
-    "crash_recovery": {"checkpoint.restored", "task.completed"},
-    "evidence_tamper": {"evidence.tamper_detected", "decision.blocked"},
-    "forged_reviewer": {"review.identity_rejected", "decision.blocked"},
-    "skill_version_rollback": {"skill.rollback_completed", "task.completed"},
-    "matrix_cherry_pick": {"matrix.completeness", "decision.blocked"},
-    "matrix_missing_seed": {"seed_rejected", "decision.blocked"},
+    scenario_id: set(event_types)
+    for scenario_id, event_types in SCENARIO_REQUIRED_EVENTS.items()
 }
 
 
@@ -99,26 +66,28 @@ def _bind_scenario_proof(trace: Dict[str, Any], scenario_id: str) -> bool:
     observed = [str(event.get("type")) for event in trace.get("events", [])]
     required = REQUIRED_TRACE_EVENTS | CANONICAL_SCENARIO_EVENTS.get(scenario_id, set())
     missing = sorted(required - set(observed))
-    replay_digests = [
-        event.get("payload", {}).get("semantic_digest")
-        for event in trace.get("events", [])
-        if event.get("type") == "effect.replayed"
-        and event.get("payload", {}).get("semantic_digest")
-    ]
-    exactly_once_ok = True
-    if scenario_id == "happy_path":
-        exactly_once_ok = (
-            observed.count("effect.committed") == 1
-            and len(replay_digests) >= 2
-            and len(set(replay_digests)) == 1
-        )
-    verified = not missing and exactly_once_ok
+    raw_replay = trace.get("replay")
+    replay: Dict[str, Any] = raw_replay if isinstance(raw_replay, dict) else {}
+    raw_run_ids = replay.get("run_ids")
+    replay_run_ids: List[Any] = raw_run_ids if isinstance(raw_run_ids, list) else []
+    raw_digests = replay.get("semantic_digests")
+    replay_digests: List[Any] = raw_digests if isinstance(raw_digests, list) else []
+    replay_ok = (
+        len(replay_run_ids) >= 2
+        and len(replay_run_ids) == len(replay_digests)
+        and len(set(replay_run_ids)) == len(replay_run_ids)
+        and len(set(replay_digests)) == 1
+    )
+    if not replay_ok:
+        missing.append("replay.run_ids+semantic_digests")
+    verified = not missing
     trace["scenario_proof"] = {
         "scenario_id": scenario_id,
         "required_event_types": sorted(required),
         "observed_event_types": observed,
         "missing_event_types": missing,
-        "exactly_once_replay_verified": exactly_once_ok,
+        "replay_verified": replay_ok,
+        "replay_run_ids": replay_run_ids,
         "replay_semantic_digests": replay_digests,
         "verified": verified,
         "claim_boundary": (
@@ -483,6 +452,10 @@ def _build_verified_trace(
             "head": ledger["items"][-1]["event_hash"],
             "source_ledger_total": ledger["total"],
         },
+        "replay": checkpoint.get(
+            "benchmark_replay",
+            {"run_ids": [], "semantic_digests": []},
+        ),
         "truth_boundary": (
             "PASS proves this AgentTeams collaboration path and its mapped evidence; "
             "it does not convert dry-run fixtures into runtime evidence."

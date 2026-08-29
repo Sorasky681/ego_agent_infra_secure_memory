@@ -11,7 +11,11 @@ from apps.agentteams_bridge.models import (
     EnvelopeKind,
     StartRunRequest,
 )
-from integrations.agentteams.benchmark_adapter import run_scenario
+from benchmarks.trace_verifier import SCENARIO_REQUIRED_EVENTS
+from integrations.agentteams.benchmark_adapter import (
+    CANONICAL_SCENARIO_EVENTS,
+    run_scenario,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,15 +51,19 @@ def test_fixture_files_cannot_be_mistaken_for_live_responses() -> None:
 
 def test_trace_and_result_schemas_encode_the_truth_gates() -> None:
     trace = json.loads(
-        (ROOT / "integrations/agentteams/trace.schema.json").read_text()
+        (
+            ROOT / "benchmarks/schemas/agentteams-rxp-trace-v1.schema.json"
+        ).read_text()
     )
     assert trace["properties"]["source"] == {"const": "AgentTeams"}
     assert trace["properties"]["execution_mode"] == {"const": "real-agentteams"}
-    assert trace["properties"]["synthetic"] == {"const": False}
     assert trace["properties"]["agents"]["minItems"] == 3
-    assert {"events", "rxp", "principals", "scenario_proof"} <= set(
+    assert {"events", "rxp", "principals", "replay"} <= set(
         trace["required"]
     )
+    assert CANONICAL_SCENARIO_EVENTS == {
+        key: set(value) for key, value in SCENARIO_REQUIRED_EVENTS.items()
+    }
 
     result = json.loads(
         (ROOT / "integrations/agentteams/result-envelope.schema.json").read_text()

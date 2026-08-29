@@ -129,6 +129,7 @@ dependencies = [
     { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
     { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -149,6 +150,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<3.4" },
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2,<9" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11,<0.15" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<0.35" },
 ]
