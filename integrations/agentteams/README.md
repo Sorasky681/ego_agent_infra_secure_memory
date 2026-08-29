@@ -73,7 +73,7 @@ acceptance.
 | conflict / replan | result-envelope conflict or terminal revision/blocked state → Controller `replan` |
 | timeout / reassign | Controller task `cancel` with `replacementTaskId`, then cycle-safe `replan` |
 | human R2 | Controller `pause`; scoped Ego token is consumed; Controller `resume`; post-R2 DAG is applied |
-| restart | SQLite run/checkpoint plus fresh Controller workflow read |
+| restart | PostgreSQL JSONB run/checkpoint in live Compose (SQLite dev fallback) plus fresh Controller workflow read |
 | compensation | failed post-grant resume/replan/send is fenced by Controller `pause` and persisted as `COMPENSATION_REQUIRED` |
 
 The bridge never writes Worker ACK, submission, acceptance, or terminal status

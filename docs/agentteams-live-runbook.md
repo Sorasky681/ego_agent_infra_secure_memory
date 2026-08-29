@@ -62,8 +62,17 @@ AGENTTEAMS_AUTH_TOKEN
 AGENTTEAMS_MATRIX_URL
 AGENTTEAMS_MATRIX_ACCESS_TOKEN
 EGO_API_URL
-EGO_AGENTTEAMS_BRIDGE_DB
+EGO_AGENTTEAMS_DATABASE_URL
+EGO_AGENTTEAMS_MIGRATION_DATABASE_URL
 ```
+
+The live Compose profile uses PostgreSQL. In a shared deployment, the migration URL is
+an owner credential used for checksummed schema replay, while the runtime URL belongs to
+a separate LOGIN granted `egoagentos_bridge_runtime` after applying
+`deploy/postgres/agentteams_bridge_security.sql` with a database/platform administrator
+(role creation can require privileges beyond the migration owner). Leave both URLs blank
+only for local SQLite development through `EGO_AGENTTEAMS_BRIDGE_DB`. An explicit
+PostgreSQL URL never falls back to SQLite after a connection or migration error.
 
 ## 4. Probe
 
@@ -96,9 +105,14 @@ storage update with an internal ETag/If-Match conditional write. A returned
 `409` is therefore surfaced as a retryable structured conflict; it is not
 silently retried over newer state.
 
-Run reconcile periodically. Restarting the bridge is safe: the SQLite
-checkpoint is reloaded and Controller workflow is fetched again. Use
+Run reconcile periodically. Restarting the bridge is safe: the PostgreSQL JSONB
+checkpoint (or SQLite development checkpoint) is reloaded and Controller workflow is fetched again. Use
 `POST /api/v1/agentteams/recover` after restart.
+
+One store operation is one database transaction. A service path containing several
+store operations and external Controller/Matrix calls is not a single atomic
+transaction; crash recovery depends on the durable compensation checkpoint and a fresh
+Controller workflow read. Do not describe it as exactly-once external execution.
 
 ## 6. R2 recovery
 

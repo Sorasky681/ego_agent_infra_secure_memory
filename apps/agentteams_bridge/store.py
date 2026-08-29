@@ -7,8 +7,9 @@ import json
 import sqlite3
 import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Protocol
 
 from .errors import BridgeError
 from .models import BridgeRun, CollaborationEnvelope, RunState, canonical_json, utc_now
@@ -17,7 +18,52 @@ from .models import BridgeRun, CollaborationEnvelope, RunState, canonical_json, 
 ZERO_HASH = "0" * 64
 
 
+def _utc_iso(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise BridgeError(
+            "event_time_invalid",
+            "Bridge ledger timestamps must carry an explicit timezone",
+        )
+    return value.astimezone(timezone.utc).isoformat()
+
+
+class BridgeStoreContract(Protocol):
+    """Persistence surface shared by the SQLite and PostgreSQL backends."""
+
+    engine: str
+
+    def create_run(self, run: BridgeRun) -> BridgeRun: ...
+
+    def get_run(self, run_id: str) -> BridgeRun: ...
+
+    def update_run(self, run: BridgeRun, *, expected_version: int) -> BridgeRun: ...
+
+    def append_event(
+        self, run_id: str, envelope: CollaborationEnvelope
+    ) -> Dict[str, Any]: ...
+
+    def events(self, run_id: str) -> Dict[str, Any]: ...
+
+    def archive_receipt(
+        self,
+        run_id: str,
+        *,
+        receipt_key: str,
+        source: str,
+        kind: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]: ...
+
+    def receipts(self, run_id: str) -> Dict[str, Any]: ...
+
+    def active_runs(self) -> List[BridgeRun]: ...
+
+
 class BridgeStore:
+    """SQLite development fallback implementing :class:`BridgeStoreContract`."""
+
+    engine = "sqlite"
+
     def __init__(self, path: str) -> None:
         self.path = path
         self._lock = threading.RLock()
@@ -68,6 +114,16 @@ class BridgeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_bridge_events_run
                     ON bridge_events(run_id, sequence);
+                CREATE TRIGGER IF NOT EXISTS bridge_events_no_update
+                BEFORE UPDATE ON bridge_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'bridge events are immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS bridge_events_no_delete
+                BEFORE DELETE ON bridge_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'bridge events are immutable');
+                END;
                 CREATE TABLE IF NOT EXISTS bridge_receipts (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     receipt_id TEXT NOT NULL UNIQUE,
@@ -212,7 +268,7 @@ class BridgeStore:
         self, run_id: str, envelope: CollaborationEnvelope
     ) -> Dict[str, Any]:
         envelope_payload = envelope.model_dump(mode="json", by_alias=True)
-        created_at = envelope.created_at.isoformat()
+        created_at = _utc_iso(envelope.created_at)
         event_id = "evt_%s" % uuid.uuid4().hex
         with self._lock, self._connection:
             row = self._connection.execute(
@@ -358,7 +414,7 @@ class BridgeStore:
             ).fetchone()
             previous_hash = previous["receipt_hash"] if previous is not None else ZERO_HASH
             receipt_id = "rcpt_%s" % uuid.uuid4().hex
-            created_at = utc_now().isoformat()
+            created_at = _utc_iso(utc_now())
             hash_payload = {
                 "receipt_id": receipt_id,
                 "run_id": run_id,
@@ -423,7 +479,14 @@ class BridgeStore:
             expected_hash = hashlib.sha256(
                 canonical_json(hash_payload).encode("utf-8")
             ).hexdigest()
-            if item["previous_hash"] != expected_previous or item["receipt_hash"] != expected_hash:
+            expected_payload_sha256 = hashlib.sha256(
+                canonical_json(item["payload"]).encode("utf-8")
+            ).hexdigest()
+            if (
+                item["payload_sha256"] != expected_payload_sha256
+                or item["previous_hash"] != expected_previous
+                or item["receipt_hash"] != expected_hash
+            ):
                 chain_valid = False
             expected_previous = item["receipt_hash"]
             items.append(item)
@@ -437,3 +500,25 @@ class BridgeStore:
                 terminal,
             ).fetchall()
         return [self._row_to_run(row) for row in rows]
+
+
+def build_bridge_store(
+    *,
+    database_url: str = "",
+    migration_database_url: str = "",
+    sqlite_path: str = "/tmp/egoagentos-agentteams-bridge.sqlite3",
+) -> BridgeStoreContract:
+    """Select PostgreSQL only when its dedicated bridge URL is explicit.
+
+    A malformed or unavailable PostgreSQL target fails closed. It never falls back to
+    SQLite after the operator supplied ``EGO_AGENTTEAMS_DATABASE_URL``.
+    """
+
+    if database_url.strip():
+        from .postgres_store import PostgresBridgeStore
+
+        return PostgresBridgeStore(
+            database_url.strip(),
+            migration_database_url=migration_database_url.strip(),
+        )
+    return BridgeStore(sqlite_path)

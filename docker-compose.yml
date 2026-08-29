@@ -62,17 +62,18 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       EGO_API_URL: http://backend:8000
-      EGO_AGENTTEAMS_BRIDGE_DB: /data/agentteams-bridge.sqlite3
+      EGO_AGENTTEAMS_DATABASE_URL: ${EGO_AGENTTEAMS_DATABASE_URL:-postgresql://${EGO_POSTGRES_USER:-egoagentos}:${EGO_POSTGRES_PASSWORD:?Set EGO_POSTGRES_PASSWORD in .env}@postgres:5432/${EGO_POSTGRES_DB:-egoagentos}}
+      EGO_AGENTTEAMS_MIGRATION_DATABASE_URL: ${EGO_AGENTTEAMS_MIGRATION_DATABASE_URL:-postgresql://${EGO_POSTGRES_USER:-egoagentos}:${EGO_POSTGRES_PASSWORD:?Set EGO_POSTGRES_PASSWORD in .env}@postgres:5432/${EGO_POSTGRES_DB:-egoagentos}}
       AGENTTEAMS_CONTROLLER_URL: ${AGENTTEAMS_CONTROLLER_URL:-http://host.docker.internal:18080}
       AGENTTEAMS_AUTH_TOKEN: ${AGENTTEAMS_AUTH_TOKEN:-}
       AGENTTEAMS_MATRIX_URL: ${AGENTTEAMS_MATRIX_URL:-http://host.docker.internal:18080}
       AGENTTEAMS_MATRIX_ACCESS_TOKEN: ${AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - egoagentos-bridge-data:/data
     ports:
       - "127.0.0.1:8010:8010"
     restart: unless-stopped
@@ -81,4 +82,3 @@ services:
 
 volumes:
   egoagentos-postgres:
-  egoagentos-bridge-data:

@@ -14,13 +14,17 @@ from .errors import BridgeError
 from .models import GrantRequest, StartRunRequest
 from .service import AgentTeamsBridge
 from .settings import BridgeSettings
-from .store import BridgeStore
+from .store import build_bridge_store
 
 
 def build_service(settings: Optional[BridgeSettings] = None) -> AgentTeamsBridge:
     resolved = settings or BridgeSettings.from_env()
     return AgentTeamsBridge(
-        BridgeStore(resolved.database_path),
+        build_bridge_store(
+            database_url=resolved.database_url,
+            migration_database_url=resolved.migration_database_url,
+            sqlite_path=resolved.database_path,
+        ),
         AgentTeamsClient(
             resolved.agentteams_base_url,
             token=resolved.agentteams_auth_token,

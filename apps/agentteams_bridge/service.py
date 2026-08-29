@@ -31,7 +31,7 @@ from .models import (
     canonical_sha256,
     utc_now,
 )
-from .store import BridgeStore
+from .store import BridgeStoreContract
 
 
 PRE_APPROVAL_STAGES = {"CONTEXT", "PLAN", "PLAN_REVIEW"}
@@ -82,7 +82,7 @@ def _status_to_raw(status: str) -> str:
 class AgentTeamsBridge:
     def __init__(
         self,
-        store: BridgeStore,
+        store: BridgeStoreContract,
         agentteams: AgentTeamsClient,
         matrix: MatrixClient,
         ego: EgoClient,

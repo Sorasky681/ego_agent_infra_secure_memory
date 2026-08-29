@@ -46,6 +46,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "apps.api" = ["fixtures/*.yaml", "migrations/postgres/*.sql"]
+"apps.agentteams_bridge" = ["migrations/postgres/*.sql"]
 "benchmarks" = ["corpus/v1/*.json", "schemas/*.json"]
 "integrations.agentteams" = ["*.json", "*.yaml", "*.tmpl", "scripts/*.py"]
 "protocols.rxp" = ["schemas/*.json"]

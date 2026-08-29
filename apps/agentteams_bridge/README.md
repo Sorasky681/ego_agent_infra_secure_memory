@@ -13,7 +13,8 @@ Key modules:
 - `clients.py`: official Controller, Matrix, and EgoAgentOS HTTP clients;
 - `service.py`: dispatch, reconcile, artifact validation, timeout/reassignment,
   R2 recovery, typed evidence finalization, compensation, and Skill evidence;
-- `store.py`: restartable SQLite checkpoints plus tamper-evident event and upstream-receipt chains;
+- `store.py`: shared persistence contract and SQLite development fallback;
+- `postgres_store.py`: PostgreSQL/PolarDB-PG JSONB checkpoints plus transactionally serialized event and receipt chains;
 - `main.py`: FastAPI operator surface;
 - `cli.py`: probe, run, R2, reconcile, and live Docker smoke commands.
 
@@ -44,3 +45,28 @@ accepted metric artifacts, bridge events, Ego task/events, and Skill evidence. T
 fetch both services, redact, write `acceptance-input.json`, assemble the immutable files, and run
 the offline verifier. Contract tests use injected transports and do not constitute a live official
 AgentTeams or GPU run.
+
+## Persistence selection
+
+`EGO_AGENTTEAMS_DATABASE_URL=postgresql://...` explicitly selects the PostgreSQL
+backend. A malformed or unavailable explicit URL fails startup and never falls back to
+SQLite. `EGO_AGENTTEAMS_BRIDGE_DB` is used only when that URL is blank and is intended
+for local development.
+
+The PostgreSQL backend replays checksummed migrations through a bridge-specific
+`bridge_schema_migrations` ledger. Set `EGO_AGENTTEAMS_MIGRATION_DATABASE_URL` to a
+separate owner connection in shared deployments, apply
+`deploy/postgres/agentteams_bridge_security.sql` with a database/platform administrator,
+and use a LOGIN identity granted only the resulting `egoagentos_bridge_runtime` role for
+the runtime URL. Runs and checkpoints
+are JSONB. Per-run advisory transaction locks serialize event and receipt chains;
+database triggers reject ledger UPDATE, DELETE, and TRUNCATE. Receipt key and receipt
+hash uniqueness are database constraints.
+
+Each public store call is atomic. A higher-level service sequence that calls
+`update_run`, `archive_receipt`, and `append_event` separately is not one distributed
+transaction; recovery relies on the persisted compensation checkpoint and upstream
+reconciliation. This backend does not claim exactly-once external effects.
+
+The real integration suite uses local disposable PostgreSQL 16. It is not evidence of a
+live PolarDB instance, managed backup, PITR, failover, or official AgentTeams execution.
