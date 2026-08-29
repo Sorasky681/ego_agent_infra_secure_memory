@@ -1,89 +1,110 @@
-# GOAI Agent Infra semifinal scorecard
+# GOAI Agent Infra 复赛就绪度记分卡
 
-Source: [Agent Infra semifinal rules](https://alidocs.dingtalk.com/i/nodes/AR4GpnMqJzYd2LLOhLB1x4zLVKe0xjE3)
-read on 2026-08-29. This document is an internal readiness rubric, not an official
-judge score.
+规则来源：[复赛规则](https://alidocs.dingtalk.com/i/nodes/AR4GpnMqJzYd2LLOhLB1x4zLVKe0xjE3)，
+于 2026-08-29 按登录态页面核对。本文是仓库内部 release gate，不是评委打分，也不替代
+组委会最新规则。
 
-## Hard requirements
+## 当前结论
 
-| Requirement | Current `main` evidence | Semifinal release gate |
+**工程候选已形成，但复赛 AgentTeams 硬门槛仍为 `BLOCKED`。** 仓库已经提供可执行
+Controller/Matrix bridge、动态 replan、超时改派、恢复与补偿、R2 HITL 恢复链、结构化
+correlation envelope、Skill 证据分级和 fail-closed benchmark adapter；这些行为已有本地
+contract/fixture 测试。当前主机没有可用的官方 AgentTeams 服务、真实 Team/Worker、Matrix
+凭据与逐场景 live binding，因此不能产生官方运行证据。已提交 benchmark 中
+`agentteams-rxp-target` 为 70/70 `SKIP`，不是 `PASS`。
+
+证据必须按以下三层表述：
+
+| 层级 | 可以主张 | 不可以主张 |
 |---|---|---|
-| AgentTeams collaboration base | v1beta1 resources and envelope contract only | a real AgentTeams task must create, dispatch, accept, execute, review, and reach a terminal state |
-| at least three distinct Agents | seven identity contracts | at least PI, Runtime, and Reviewer must appear as distinct AgentTeams principals in one correlated run |
-| core Skills | six `SKILL.md` packages | runtime discovery, version pin, invocation, result, and failure must be present in the same task trace |
-| runnable and verifiable | deterministic local control plane and static replay | clean install, live collaboration run, failure branch, approval recovery, raw trace export, and replay command |
-| high-risk governance | scoped API/MCP token and audit chain | R2 action must stop, show exact scope, resume only after grant, reject replay, and preserve rollback evidence |
+| 已实现 | bridge、schema、adapter、runbook 与 release verifier 已进入代码库 | 这些代码已经驱动官方服务 |
+| 本地验证 | fixture/contract、离线契约锁、状态机、RXP、Skill runtime 与安全 oracle 通过测试 | fixture 是 AgentTeams Worker 的真实输出 |
+| 官方 live | 仅当 Controller、TeamHarness、Matrix 与真实 Worker 共同产生可复核 trace 后成立 | 用静态回放、mock response、角色标签或自报 `pass` 替代 live trace |
 
-The current static replay remains useful product documentation, but it is not accepted as
-evidence for a live AgentTeams or Skill execution claim.
+## 硬门槛与否决项
 
-## Weighted readiness
+以下条目按复赛硬要求转化为仓库的 fail-closed 验收门。任何一项未满足，均不得把作品标记
+为“复赛 live-ready”；本表只说明仓库如何执行规则，不扩写新的官方规则。
 
-| Dimension | Weight | Current strengths | Current loss / red-line risk | Target evidence |
+| 硬门槛 / 否决风险 | 必须提交的机器证据 | 当前状态 | Release 判定 |
+|---|---|---|---|
+| 核心业务链真实使用 AgentTeams | 同一 Project 的官方 create/workflow/spawn/Matrix 标识，覆盖创建、委派、接单、执行、验收与终态 | bridge 合同完成；无官方 live run | **未满足** |
+| 至少 3 个不同职能 Agent | trace 中至少 3 个真实 AgentTeams Worker，`id`、Matrix user、role 唯一且事件 actor 可解析 | 资源定义 7 个 Worker；仅本地合同验证 | **未满足 live 证明** |
+| 动态协作而非固定脚本 | 中间结果触发 conflict/replan；timeout 触发 cancel/replacement/reassign；恢复后继续原 correlation | 逻辑与故障测试完成；无官方事件链 | **未满足 live 证明** |
+| 核心 Skill 可发现、调用、追踪 | Worker 声明、spawn 授权和官方成功 `tool_result`；版本及 package digest 与任务 trace 关联 | 本地 registry/API 可运行；AgentTeams `TOOL_INVOKED` 未 live 验证 | **部分满足** |
+| 高风险动作有人类授权 | R2 先 pause，单次 scope-bound Grant 被 EgoAgentOS 消费，再 resume/replan；重放被拒 | bridge 与本地 approval/RXP 测试完成；无 live receipt | **部分满足** |
+| Demo 可运行且证据真实 | 干净环境启动、失败分支、恢复、原始 trace、artifact digest 和 replay 命令 | 本地 synthetic Demo 可运行；官方 live Demo 缺失 | **未满足** |
+| 不伪造数据、trace 或结果 | adapter 的 `PASS` 由 benchmark 自己校验持久化 trace；缺服务/绑定必须 `SKIP` | 已 fail-closed；当前 target 全部 `SKIP` | **防伪门已满足，业务门未满足** |
+
+固定脚本、模拟 AgentTeams 事件、空 trace、自报指标、预填 Worker 状态或截图均不能消除上述
+缺口。`scripted-negative-control-v1` 只能作为反例；`SKIP` 降低覆盖率且在 release gate 中按
+失败处理。
+
+## 五项评分映射
+
+这里不计算主观“预估总分”，只列出可复核证据和当前失分面。
+
+| 复赛维度 | 权重 | 当前可复核优势 | 仍需补齐的评审证据 | 当前判定 |
 |---|---:|---|---|---|
-| scenario value and portability | 20 | narrow embodied-AI ResearchOps workflow; explicit completion criteria | synthetic data only; no researcher baseline or external acceptance | one authorised real or openly reproducible experiment, manual baseline, and a second workflow mapping |
-| multi-Agent collaboration | 25 | clear Manager/Worker identities and separation of duties | local core path is a fixed handler sequence; no live AgentTeams task, timeout, reassign, or conflict | AgentTeams run ID, room/task events, dynamic replan, timeout/reassign/resume, HITL continuation |
-| Skill engineering | 20 | six packaged contracts with safety/failure sections | no runtime discovery or invocation Trace; no lifecycle execution | discovered version digest, invocation I/O refs, evaluation, registry candidate, rollback/retirement record |
-| engineering and safety | 30 | deterministic state, SQLite recovery, evidence gate, scoped token, MCP tests, public CI | external collaboration chain is not runnable; limited SLO/fault evidence | RXP conformance, crash recovery, exactly-once effects, raw correlated traces, failure injection report |
-| open-source contribution | 5 | public Apache-2.0 repository, locked deps, tests, schemas | no formal release or external adoption evidence | tagged release, protocol specification, conformance suite, reproducible install, issue/feedback trail |
+| 场景价值与可迁移性 | 20% | 面向具身 AI 实验的目标→矩阵→执行→评测→复核→决策闭环；RXP 与 adapter 为领域无关合同 | 一次授权的真实或公开可复现实验、研究员手工基线，以及第二领域的迁移映射 | `PARTIAL` |
+| 多 Agent 协作 | 25% | 7 个职责分离 Worker；bridge 映射 Project/TeamHarness/Matrix；实现 conflict/replan、timeout/reassign/resume/compensation | 一条官方 live trace 证明至少 3 Worker 的动态协作与终态验收 | `BLOCKED` |
+| Skill 工程化 | 20% | 6 个版本化 Skill 包；本地 discovery、digest pin、invocation trace、canary/retire/rollback 已实现并测试 | 在真实 Worker 上证明包存在、spawn 授权、成功调用、失败与版本回滚 | `PARTIAL` |
+| 工程实现与安全审计 | 30% | RXP/1 reference implementation、14 场景 benchmark、独立 trace oracle、持久化 evidence bundle、PostgreSQL 事务/审计 profile、R2/重放/篡改门禁 | 官方 AgentTeams live fault injection、外部 effect exactly-once、真实恢复时间与完整 release bundle | `PARTIAL` |
+| 开源贡献 | 5% | Apache-2.0 代码、JSON Schema、Skill、adapter、测试、runbook 与可复现实验协议均公开可读 | tag/release、干净机安装记录，以及外部 issue、复用或反馈证据 | `PARTIAL` |
 
-## Non-negotiable truth boundaries
+## AgentTeams live 证据门
 
-The following claims may only be promoted from `designed` to `verified` when the named
-artifact exists and a clean replay checks it:
+只有 [`agentteams-live-runbook.md`](agentteams-live-runbook.md) 的验收项全部成立，才可将
+AgentTeams claim 从 `contract-verified` 升级为 `live-verified`。最低证据包必须包含：
 
-1. **AgentTeams live**: official controller/team task identifier plus Manager and Worker
-   events from the same task.
-2. **Skill executed**: discovery record, package/version digest, invocation input/output
-   references, and terminal result.
-3. **Experiment executed**: protocol Intent, exact one-time Grant, executor Receipt,
-   immutable artifacts, evaluator Evidence, and Decision.
-4. **Reproducible**: two independent executions agree on the declared determinism level;
-   byte identity is required only for artifacts declared byte-deterministic.
-5. **Real performance**: data licence/source, sample count, hardware/software environment,
-   metric implementation, raw samples, aggregation, and confidence interval.
+1. 官方 Controller 版本、部署镜像/commit、Team `Active` 与 Worker ready 记录；
+2. 同一 `project_id`、`task_id`、`trace_id`、`correlation_id` 与 `context_version`；
+3. 至少 3 个真实 Worker 的 delegate、ACK、Skill/tool、submit、accept 与 review 事件；
+4. 一次中间冲突 replan 和一次 timeout cancel/replacement/reassign；
+5. R2 pause → 人类 Grant → Ego receipt → resume 的连续恢复链；
+6. Intent → Grant → Receipt → Evidence → Matrix/Decision 的 digest 关联；
+7. 原始 artifact、workflow 与 Matrix response 的 SHA-256；
+8. benchmark 生成的持久化 trace、manifest、replay 结果与匹配的 `trace_sha256`。
 
-No static fixture, screenshot, prefilled event, or role label can satisfy these gates.
+## Benchmark release gate
 
-## Semifinal acceptance benchmark
+候选 release 必须执行：
 
-Every candidate release must pass all safety invariants and meet the quantitative targets
-below. A skipped mandatory scenario is a release failure.
+```bash
+EVIDENCE_DIR="$PWD/release-evidence-$(date +%Y%m%dT%H%M%S)" \
+  make benchmark-release
+```
 
-| Metric | Target |
+`--release-gate` 要求 14 个 canonical scenario 的每次 target trial 均有场景特定、可重放的
+live evidence；任一 `FAIL`、`ERROR` 或 `SKIP` 都使 release 失败。安全指标不得由任务完成率、
+延迟或成本抵消：
+
+| 不变量 | Release target |
 |---|---:|
 | approval bypass | 0 |
-| accepted replay / expired / wrong-scope grants | 0 |
-| unauthorised or cross-task state mutation | 0 |
-| forged independent review accepted | 0 |
-| duplicate external effects under concurrent retry | 0 |
-| required trace/evidence field completeness | 100% |
-| hash-chain and artifact digest verification | 100% |
-| terminal recovery after injected recoverable failure | 100% |
-| matrix cells silently omitted from final decision | 0 |
-| fixed-seed protocol replay hash agreement | 100% |
-| dynamic-routing scenarios taking the required alternate route | 100% |
+| replay / expired / wrong-scope Grant 被接受 | 0 |
+| 未授权或跨任务状态修改 | 0 |
+| forged independent review 被接受 | 0 |
+| 并发重试产生重复外部 effect | 0 |
+| required trace / evidence 完整率 | 100% |
+| artifact digest、Merkle root 与 event chain 校验率 | 100% |
+| 可恢复故障到达合法终态 | 100% |
+| matrix cell 被静默遗漏 | 0 |
+| fixed-seed semantic replay hash 一致率 | 100% |
+| conflict/timeout 场景走到必需 alternate route | 100% |
 
-Latency, token cost, and task-completion rate are reported with distributions and confidence
-intervals. They are optimisation metrics, never allowed to compensate for a failed safety
-invariant.
+## 复赛 Demo 放行清单
 
-## Evidence package required for the semifinal Demo
+八分钟 Demo 应连续展示以下证据，不以剪辑隐藏状态跳转：
 
-The live or recorded Demo must fit within eight minutes and show, without cuts that hide the
-state transition:
+1. 官方 AgentTeams Project 创建、Team Leader 委派、Worker ACK 与共享 correlation；
+2. Skill discovery、精确版本/package digest 与成功 invocation trace；
+3. RXP MatrixPlan 展开为 cells，并为本次执行生成 Intent；
+4. 未授权 R2 被阻止；人类核对精确 scope 后签发一次性 Grant；
+5. 冲突触发 replan，超时触发 replacement/reassign，而不是固定下一步；
+6. Receipt、原始 metric Evidence、独立 Reviewer 与 Decision gate；
+7. Grant replay、artifact tamper 或 forged review 被拒绝；
+8. bridge 重启、checkpoint 恢复，以及最终 evidence bundle 的离线 replay。
 
-1. AgentTeams task creation, delegation, acceptance, and correlated context.
-2. a Skill being discovered and invoked with its exact version digest.
-3. an experiment Intent expanding into matrix cells and one grant per executable cell.
-4. R2 blocking before execution and continuation after a scope-bound human grant.
-5. an injected timeout or conflicting review causing reassign/replan rather than a fixed next
-   step.
-6. executor Receipt, raw metric Evidence, independent review, and decision gate.
-7. a replay/tamper attempt rejected with an auditable reason.
-8. restart/resume and the final task, trace, evidence, and protocol export.
-
-The updated deck must also include a clearly marked comparison against the initial-round
-submission, a user/pain/value/input-output closure diagram, risk boundary, and a concrete
-cross-domain migration recipe. If no official initial-round written feedback is available,
-the deck must say that explicitly and label the comparison as a self-audit, not judge feedback.
+在上述 live 证据产生前，演示文案必须使用“可执行 bridge + contract-verified”，不能使用
+“已接通 AgentTeams”“已完成真实多 Agent 实验”或“14 场景已通过”。
