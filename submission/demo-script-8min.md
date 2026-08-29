@@ -15,12 +15,14 @@ configured, leave the target row on screen as `SKIP`; do not substitute a local 
 Open the RXP Cockpit. Read the visible truth labels first: `STATIC FIXTURE`, `NO LIVE GPU`,
 `NO PRODUCTION SIGNATURE TRUST`. Explain the failure mode: one Agent can propose, run,
 measure, and write a favorable conclusion while silently omitting failed matrix cells.
+These labels describe the hosted browser fixture. The repository separately contains a
+real, bounded Fashion-MNIST GPU adapter, but no authenticated live output from it.
 
 Introduce the narrow protocol claim: RXP/1 binds an experiment to
 `Intent → Grant → Receipt → Evidence → Decision`; MatrixLedger proves the expected
 and decided cell sets close. It complements MCP/A2A/PROV/MLflow rather than replacing them.
 
-## 1:00–3:00 — Dynamic collaboration, not a fixed script
+## 1:00–2:30 — Dynamic collaboration, not a fixed script
 
 Show the seven principals and name at least Manager, Architect, Runtime, Evaluator, and
 independent Reviewer. Walk through project creation, DAG decomposition, delegation,
@@ -30,8 +32,11 @@ Switch to the failure trace: conflict causes replan/generation change; timeout c
 bounded reassignment; crash resumes from persisted state; R2 waits for a human Grant;
 failed work is compensated without erasing the original trace. State explicitly that the
 official contract bridge is tested locally, while the live AgentTeams target is SKIP.
+The production bridge store persists JSONB checkpoints, events, and receipts in PostgreSQL;
+CAS, per-run advisory locks, receipt uniqueness, append-only triggers, and full event-chain
+verification make restart and concurrency fail closed. SQLite is only the developer fallback.
 
-## 3:00–5:00 — One token, one matrix cell
+## 2:30–4:15 — One token, one matrix cell
 
 Generate and verify the deterministic protocol fixture:
 
@@ -51,7 +56,28 @@ Then show runtime Skill discovery and invocation through OpenAPI:
    input/output digests and invocation ID.
 3. Invoke `safe-experiment-runner` generically; show `403 / E_NOT_EXECUTABLE`.
 
-## 5:00–6:45 — Strict benchmark and negative control
+## 4:15–5:25 — Real GPU contract and one-command acceptance
+
+Open `experiments/fashion_mnist_amp/config.json`. Show the frozen real Fashion-MNIST,
+TinyCNN FP32-versus-AMP comparison and its hard limits: exactly one CUDA GPU, seed 42,
+one physical launch, at most 900 seconds, 0.25 GPU·hour, and 100 MiB. The runner retains
+every prediction and latency repetition plus GPU UUID/utilization/memory/power telemetry.
+
+Then open `semifinal_acceptance/README.md`. Explain that the content-addressed bundle binds
+Matrix messages, AgentTeams and approval receipts, raw metrics, Evidence Gate, failure/
+recovery checkpoints, independent review, primary Trace, RXP Decision, and top-level
+Decision. Show or run the contract tests:
+
+```bash
+make test-experiments
+make test-acceptance
+```
+
+Say the terminal truth exactly: `CONTRACT_PASS_ORIGIN_UNVERIFIED` and
+`live_claim_allowed=false`. Thirteen experiment tests and sixteen acceptance tests prove
+fail-closed contracts, not an official AgentTeams/GPU run or model improvement.
+
+## 5:25–6:35 — Strict benchmark and negative control
 
 Open `benchmarks/artifacts/2026-08-29-local-cpu.md`. Point out the three profiles:
 
@@ -69,12 +95,15 @@ make benchmark-release EVIDENCE_DIR=/tmp/egoagentos-live-evidence
 The second command must return non-zero without a new persistent live evidence directory
 containing same-run target traces.
 
-## 6:45–7:30 — Production-shaped state, honest boundary
+## 6:35–7:30 — Production-shaped state, honest boundary
 
-Show the PostgreSQL proof: real PostgreSQL 16 integration tests passed for transactions,
-optimistic concurrency, tenant isolation, immutable audit, migration checksums, and
-LISTEN/NOTIFY. Immediately state what did not run: PolarDB, PITR restore, cloud IAM, and
-the latest application image build (Docker Hub metadata timeout).
+Show the PostgreSQL proof: **27/27 tests passed on local PostgreSQL 16.14** for control-plane
+and AgentTeams-bridge persistence, optimistic concurrency, roles/RLS, append-only ledgers,
+durable cursors, migration checksums, restart/CAS/idempotency, and `LISTEN/NOTIFY`. Show that
+the Memory Curator may insert only `memory_candidates`; a separate `memory-validator`
+promotes validated memory after the Evidence Gate. Immediately state what did not run:
+PolarDB provisioning, provider identity, managed backup/PITR restore, measured RPO/RTO,
+cloud IAM, and the latest application image build (Docker Hub metadata timeout).
 
 ## 7:30–8:00 — Close on reproducibility
 

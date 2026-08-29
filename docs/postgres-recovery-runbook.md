@@ -2,12 +2,14 @@
 
 ## Evidence boundary
 
-The repository contains two interchangeable implementations of one synchronous store
-contract:
+PostgreSQL is the production data path. SQLite remains only the zero-service developer
+fallback. Both runtime surfaces preserve an explicit synchronous store contract:
 
-- SQLite remains the zero-service local/development backend (`EGO_DB_PATH`).
-- PostgreSQL is selected by a `postgresql://` or `postgres://` `EGO_DATABASE_URL` and is
-  exercised by real PostgreSQL 16 integration tests.
+- the control plane selects PostgreSQL with a `postgresql://` or `postgres://`
+  `EGO_DATABASE_URL`; leaving it unset selects the SQLite `EGO_DB_PATH` fallback;
+- the AgentTeams bridge selects its PostgreSQL JSONB checkpoint/event/receipt store with
+  `EGO_AGENTTEAMS_DATABASE_URL`; leaving it unset selects its SQLite development store;
+- both PostgreSQL paths are exercised together by the real local PostgreSQL 16.14 suite.
 - PolarDB for PostgreSQL is a compatibility target. No cloud instance, backup policy,
   failover, or point-in-time recovery (PITR) has been executed without project credentials.
 
@@ -45,6 +47,14 @@ Use `apply` only for a migration-owner startup or the local Compose profile. Res
 runtime replicas should use `verify`, which performs an exact read-only comparison of all
 packaged migration versions and checksums.
 
+The bridge uses its own migration-owner URL so its restricted runtime never needs DDL:
+
+```bash
+EGO_AGENTTEAMS_DATABASE_URL='postgresql://BRIDGE_RUNTIME:REDACTED@HOST:5432/DB?sslmode=require' \
+  EGO_AGENTTEAMS_MIGRATION_DATABASE_URL='postgresql://MIGRATION_OWNER:REDACTED@HOST:5432/DB?sslmode=require' \
+  uv run uvicorn apps.agentteams_bridge.main:app --host 0.0.0.0 --port 8010
+```
+
 ## Schema and concurrency invariants
 
 In `apply` mode, the API takes a migration advisory lock, creates `schema_migrations`, and
@@ -80,6 +90,10 @@ only the evidence ledger; Memory Curator can mutate only `memory_candidates`, ne
 validated memory. A deployment owner must create LOGIN identities from its secret
 manager, grant these roles, and set `egoagentos.tenant_id` per connection.
 The RLS helper returns no tenant when that setting is absent, so runtime access fails closed.
+The bridge has a separate
+[`egoagentos_bridge_runtime`](../deploy/postgres/agentteams_bridge_security.sql) role; it can
+update run/checkpoint state but cannot update, delete, truncate, or disable triggers on the
+event and receipt ledgers.
 
 ## Verified integration test
 
@@ -90,11 +104,22 @@ EGO_TEST_POSTGRES_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/TEST_DB' \
   make test-postgres
 ```
 
-The suite recreates only the `public` schema of that explicit test database. It covers a
-full API completion, atomic rollback, stale-version rejection, two-service serialization,
-eight concurrent audit writers, direct tamper rejection, commit-ordered notification,
-silent rollback, idempotency contention, and fresh migration replay. CI provides an
-isolated `postgres:16-alpine` service and runs the same suite.
+The suite recreates only the `public` schema of that explicit test database. The verified
+2026-08-29 result is **27/27 PASS on local PostgreSQL 16.14**. It covers:
+
+- full API completion, atomic rollback, optimistic concurrency, tenant isolation,
+  idempotency contention, durable event cursors, commit-ordered `LISTEN/NOTIFY`, and
+  fresh migration/checksum replay;
+- runtime/auditor/evidence-writer/memory-curator roles, RLS, candidate-only memory curation,
+  and database-enforced append-only evidence/memory/audit ledgers;
+- AgentTeams JSONB checkpoints, CAS/per-run advisory locks, restart recovery, serialized
+  event chains, receipt idempotency/uniqueness, append-only bridge ledgers, and concurrent
+  migration initialization;
+- the generic PostgreSQL fixture for the PolarDB preflight contract and fresh-schema gates.
+
+CI provides an isolated `postgres:16-alpine` service and runs the same suite. This result is
+not PolarDB provisioning, provider identity, managed backup, PITR, failover, or cloud IAM
+evidence.
 
 ## Logical backup and restore drill
 

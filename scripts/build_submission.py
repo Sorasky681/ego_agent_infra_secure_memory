@@ -9,7 +9,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Set
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,8 +95,37 @@ def is_excluded(relative: Path) -> bool:
     return relative.suffix in EXCLUDED_SUFFIXES
 
 
+def git_tracked_paths() -> Set[Path]:
+    """Return the repository paths recorded in the Git index.
+
+    Packaging reads bytes from the working tree after this membership check, so
+    reviewed-but-dirty edits to tracked files are included while ignored and
+    untracked local artifacts fail closed.
+    """
+
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        diagnostic = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError("cannot enumerate Git tracked files: %s" % diagnostic)
+    return {
+        Path(item.decode("utf-8"))
+        for item in completed.stdout.split(b"\0")
+        if item
+    }
+
+
 def included_files() -> Iterable[Path]:
+    tracked = git_tracked_paths()
     for name in DEFAULT_FILES:
+        relative = Path(name)
+        if relative not in tracked:
+            continue
         path = ROOT / name
         if path.exists() and not path.is_symlink():
             yield path
@@ -108,6 +137,8 @@ def included_files() -> Iterable[Path]:
             if not path.is_file() or path.is_symlink():
                 continue
             relative = path.relative_to(ROOT)
+            if relative not in tracked:
+                continue
             current = ROOT
             if any((current := current / part).is_symlink() for part in relative.parts):
                 continue

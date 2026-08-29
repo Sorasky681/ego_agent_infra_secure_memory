@@ -1,7 +1,7 @@
 # EgoAgentOS ResearchOps API
 
-FastAPI control plane with interchangeable SQLite and PostgreSQL persistence for the EgoLite
-competition demo. The workflow is a strict
+FastAPI control plane with PostgreSQL as the production persistence path and SQLite as a
+zero-service developer fallback for the EgoLite competition demo. The workflow is a strict
 state machine; policy, approvals, provenance hashes, evaluation, evidence verification, and
 audit persistence are deterministic Python rather than LLM assertions.
 
@@ -65,12 +65,26 @@ at `VERIFY`; the response states the exact missing artifact without claiming suc
 Every mutating route accepts `Idempotency-Key`. Reusing a key with a different body returns a
 structured conflict. API errors use `{"error":{"code", "message", "details", "request_id"}}`.
 
+At `MEMORY_SKILL`, the Memory Curator can append only `memory_candidates`. A separate
+deterministic `memory-validator` actor checks the completed Evidence Gate and creates validated
+memory. PostgreSQL `GRANT`/RLS policy denies the Curator direct `memories` inserts, and database
+triggers reject update/delete/truncate on evidence, candidate, and validated-memory ledgers.
+
 Set `EGO_DATABASE_URL=postgresql://...` to use the real psycopg backend. It implements the
 same store contract with atomic transactions, optimistic task versions, row locks, an
-append-only database trigger, stream-scoped advisory locks, and commit-ordered
-`ego_stage_events` notifications. See the
+append-only database trigger, stream-scoped advisory locks, durable event cursors, and
+commit-ordered `ego_stage_events` notifications. Use `EGO_DATABASE_MIGRATION_MODE=apply` only
+with a migration-capable owner; restricted runtime roles use `verify`, which checks the exact
+migration checksum map without attempting DDL. The four least-privilege roles are runtime,
+auditor, evidence writer, and memory curator. See the
 [database runbook](../../docs/postgres-recovery-runbook.md) for migration, RLS, test, backup,
 and recovery procedures.
+
+`apps/api/polardb_preflight.py` provides a fail-closed live acceptance command for a writer,
+read-only node, roles, RLS, append-only triggers, JSONB/pgvector capability, migration state,
+and transactional `LISTEN/NOTIFY`. Passing its generic PostgreSQL fixture tests is not proof of
+a PolarDB deployment, backup policy, failover, or PITR restore; those remain `NOT RUN` until a
+real cloud acceptance manifest and resulting evidence bundle are captured.
 
 ## External adapter truth states
 

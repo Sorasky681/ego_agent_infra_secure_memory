@@ -5,15 +5,16 @@ evidence URI is produced by the current repository and replayed successfully.
 
 ## Verification snapshot, 2026-08-29
 
-The default cross-component suite at this snapshot contains **136 tests**: API 29,
-RXP 26, Skills 6, semifinal proof 1, Benchmark 20, AgentTeams 20, MCP 23, and Web 11. This count is a
-dated commit snapshot, not a rolling promise. After any change, live `make test` and
-CI output are authoritative. The PostgreSQL suite is listed separately because it
-requires an explicit real database URL and is not included in the default 136.
+The default cross-component suite at this snapshot contains **209 tests**: API 56,
+RXP 26, Skills 6, semifinal proof 1, Benchmark 28, Acceptance 16, AgentTeams 28,
+Experiments 13, MCP 23, and Web 12. This count is a dated commit snapshot, not a
+rolling promise. After any change, live `make test` and CI output are authoritative.
+The 27-test PostgreSQL 16.14 suite is listed separately because it requires an explicit
+real database URL and is not included in the default 209.
 
 | Claim | Current state | Required evidence |
 |---|---|---|
-| deterministic ResearchOps state machine runs end to end | verified locally, synthetic workload | 29 API/domain tests at the dated snapshot + isolated replay to `COMPLETED` |
+| deterministic ResearchOps state machine runs end to end | verified locally, synthetic workload | 56 API/domain tests at the dated snapshot + isolated replay to `COMPLETED` |
 | R2 execution cannot bypass human approval | verified locally | API negative replay returned `approval_required`; consumed approval replay returned `approval_already_decided` |
 | decision requires 7/7 verified evidence kinds | verified locally | happy path gate `pass` at 7/7; missing-trace path stopped at `VERIFY` with no Decision |
 | included metric comparison is deterministic | verified against synthetic fixture | fixed-seed evaluator unit tests + replayed raw sample artifact |
@@ -26,18 +27,22 @@ requires an explicit real database URL and is not included in the default 136.
 | RXP is persisted by the FastAPI task store or a distributed transparency service | not claimed | durable RXP document/artifact store, serializable distributed replay registry, task correlation, and externally checkpointed root required |
 | Skill catalog, digest pinning, invocation trace, and lifecycle rules work | verified in the in-process reference runtime | 6 Skill tests; strict `x.y.z`; six packages discovered, exactly three allowlisted handlers; canary, activate, retire, rollback, pin mismatch, and fail-closed traces |
 | Skill rollout state or invocation traces survive API restart | not claimed | durable shared registry state, transaction contract, multi-replica routing proof, and recovery test required |
-| Web cockpit reflects backend gate truth | verified locally | 11 component/normalization/static-replay tests + production build + completed/approval/mobile screenshots |
-| PostgreSQL store preserves the control-plane contract | verified on real local PostgreSQL 16, 10/10 PASS | real-container suite: full API, atomic rollback, optimistic concurrency, linear audit chain, immutable trigger, commit-only notify, migration replay |
+| Web cockpit reflects backend gate truth | verified locally | 12 component/normalization/static-replay tests + production build + desktop/mobile acceptance-path QA |
+| PostgreSQL store preserves the control-plane and AgentTeams bridge contracts | verified on real local PostgreSQL 16.14, 27/27 PASS | real-container suite: full API, atomic rollback, optimistic concurrency, append-only ledgers, advisory-lock CAS, commit-only notify, migration replay, bridge restart/concurrency, and least-privilege roles |
+| Memory Curator cannot directly publish validated memory | verified in application and PostgreSQL policy | Curator inserts `memory_candidates`; an independent deterministic validator promotes after the gate; RLS/GRANT and mutation triggers enforce the boundary |
 | PolarDB-PG deployment or PITR completed | NOT RUN, not claimed | cloud endpoint handshake, backup policy, restore job, chain replay, measured RPO/RTO required |
+| PolarDB-PG preflight contract is executable | verified locally against PostgreSQL fixtures; no cloud claim | fail-closed checks cover TLS/engine marker, writer/reader topology, JSONB/pgvector capability, four roles, RLS, append-only triggers, migration checksums, and LISTEN/NOTIFY |
 | Docker Compose topology is syntactically valid | verified with `docker compose config` | rendered services, PostgreSQL healthcheck, dependency ordering, and non-empty local secret requirement |
 | API/Web Docker image build succeeds on this host | NOT VERIFIED | the 2026-08-29 attempts timed out while fetching Docker Hub metadata; a later successful clean build and health check are required |
 | API invokes MCP over HTTP in the default Web replay | not claimed | network client call trace + correlated tool artifact required |
 | CPU hashing recovery branch works | synthetic control-flow fixture only | before/after fixture + trace sequence; requires physical-run evidence for a performance claim |
+| bounded Fashion-MNIST FP32/AMP workload adapter is executable | contract-verified; external origin unverified | 13 experiment tests cover one-CUDA-GPU fail-closed execution, resource limits, raw artifacts, telemetry, manifests, and offline verification; no live run is bundled |
 | 8×RTX 4090 experiment ran | not claimed | real scheduler logs + manifests + metric artifacts |
-| AgentTeams bridge contract/state/fault behavior | verified with explicit contract fixtures; not live | 20 AgentTeams tests: official pins, real-endpoint call shapes, result digests, reassign, R2, compensation, skill-evidence levels, trace truth gates |
+| AgentTeams bridge contract/state/fault behavior | verified with explicit contract fixtures; not live | 28 AgentTeams tests: official pins, PostgreSQL-capable checkpoints, full hash-chain verification, endpoint call shapes, result digests, reassign, R2, compensation, skill-evidence levels, and trace truth gates |
 | AgentTeams Matrix collaboration is live | not verified on this host | real Controller version/health, active Team and ready Workers, Project/workflow IDs, Matrix event IDs, official spawn/tool trace, content-addressed artifacts, scoped R2 receipt, final trace hash |
+| semifinal acceptance bundle detects incomplete or forged evidence | verified locally; origin remains unverified | 16 tests cover eight MVP acceptance scenarios, Matrix/Decision closure, receipt uniqueness, raw metric policy, trace consistency, recovery checkpoints, resource limits, and negative origin promotion |
 | committed RXP Bench artifact is reproducible infrastructure evidence | verified as a synthetic local artifact | 14 scenarios × 5 repetitions × 3 profiles = 210 trials; corpus digest `eed5d4e06adc4713a765b3961643cda538b393bf651a848a24077a77b15098a4`; semantic result digest `59a39f466a0506fdc6246cd13860283a314e8881c58ddda7a5f9930c9b561d80` |
-| canonical 14-scenario AgentTeams target benchmark passes | not claimed; 70/70 target trials are honest `SKIP` in the committed artifact because no live target was configured | one scenario-specific live trace per seed; generic completion is rejected and missing live bindings remain `SKIP`, never PASS |
+| canonical 14-scenario AgentTeams target benchmark passes | not claimed; 70/70 target trials are honest `SKIP` in the committed artifact because no live target was configured | 28 benchmark tests enforce one scenario-specific live trace per seed; generic completion is rejected and missing live bindings remain `SKIP`, never PASS |
 | Higress isolates upstream credentials | not configured | route export + positive/negative leak test |
 | Nacos Skill is published | not configured; local registry proof is not publication | registry version response + package digest + online rollout status |
 | official Aliyun SLS Skill queried a trace | not configured | redacted invocation + matching trace ID |

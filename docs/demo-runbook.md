@@ -7,11 +7,13 @@ does not require a GPU, AgentTeams, Nacos, Higress, PolarDB, or other cloud cred
 
 | Surface | What this replay proves | What it does not prove |
 |---|---|---|
-| Research Cockpit | persisted local state, approval, evidence gate, audit, deterministic synthetic replay | physical GPU/model performance |
+| Research Cockpit | persisted state, approval, evidence gate, audit, deterministic replay, and a bounded real-GPU workload contract | an actually executed GPU/model result |
+| Fashion-MNIST adapter | real one-GPU FP32/AMP execution and offline-verifier contracts, covered by 13 tests | authenticated AgentTeams/GPU origin or a model-improvement result |
+| Acceptance bundle | eight-scenario content-addressed Matrix/receipt/metric/gate/recovery/Trace/Decision checks, covered by 16 tests | live origin promotion or the full 14-scenario release gate |
 | RXP API | schema catalog, synthetic fixture, structural ledger verification | RXP persistence in the task store or issuer trust |
 | Skill API | six packages discovered, three deterministic handlers, digest-bound traces | durable rollout state or Nacos publication |
-| PostgreSQL | real PostgreSQL 16 store contract, 10/10 integration tests | PolarDB cloud deployment or PITR |
-| AgentTeams | executable bridge contracts and honest target `SKIP` without live bindings | live Matrix collaboration |
+| PostgreSQL | real PostgreSQL 16 store/role/ledger contract, 27/27 integration tests | PolarDB cloud deployment or PITR |
+| AgentTeams | executable bridge/finalization contracts and honest target `SKIP` without live bindings | official live Matrix collaboration |
 
 ## 1. Start the local stack
 
@@ -157,8 +159,9 @@ The deterministic core recorded 50 PASS and 20 capability SKIP trials. The scrip
 negative control recorded 70 deliberate FAIL trials. With no live AgentTeams target
 configured, all 70 target trials are `SKIP`, never PASS.
 
-The dated default-suite snapshot is 136 tests: API 29, RXP 26, Skills 6, semifinal proof 1,
-Benchmark 20, AgentTeams 20, MCP 23, and Web 11. Re-run instead of treating that number as permanent:
+The dated default-suite snapshot is 209 tests: API 56, RXP 26, Skills 6, semifinal proof 1,
+Benchmark 28, Acceptance 16, AgentTeams 28, Experiments 13, MCP 23, and Web 12. Re-run
+instead of treating that number as permanent:
 
 ```bash
 make test
@@ -172,7 +175,10 @@ EGO_TEST_POSTGRES_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/TEST_DB' \
 ```
 
 The suite recreates the `public` schema of that named test database. The verified
-2026-08-29 result was 10/10 PASS on PostgreSQL 16. PolarDB and PITR were NOT RUN.
+2026-08-29 result was 27/27 PASS on PostgreSQL 16.14. PolarDB and PITR were NOT RUN.
+Those 27 tests cover control-plane and AgentTeams-bridge persistence, roles/RLS,
+candidate-only memory curation, database-enforced append-only ledgers, durable cursors,
+restart/CAS/idempotency, migration checksums, preflight contracts, and `LISTEN/NOTIFY`.
 
 ## 6. Optional live integration checks
 

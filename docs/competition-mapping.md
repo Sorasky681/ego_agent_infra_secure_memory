@@ -9,10 +9,10 @@
 
 | 复赛维度 | 权重 | EgoAgentOS 设计回应 | 已落库证据 | 当前真实边界 |
 |---|---:|---|---|---|
-| 场景价值与可迁移性 | 20% | 把具身 AI 的高成本实验从聊天式黑盒改为目标、矩阵、授权、执行、复核和决策闭环 | `apps/api/`、`protocols/rxp/`、6 个 Skills、14 场景 benchmark | committed workload 为 synthetic；尚无真实科研用户基线和跨领域验收 |
+| 场景价值与可迁移性 | 20% | 把具身 AI 的高成本实验从聊天式黑盒改为目标、矩阵、授权、执行、复核和决策闭环 | `apps/api/`、`protocols/rxp/`、6 个 Skills、14 场景 benchmark、真实 Fashion-MNIST 单 GPU adapter | adapter 与验收器已实现，但官方 GPU/AgentTeams origin 未验证；尚无真实科研用户基线和跨领域验收 |
 | 多 Agent 协作 | 25% | AgentTeams 负责真实团队协作；PI、Scout、Architect、Runtime、Evaluator、Reviewer、Memory Curator 分权；中间结果可 replan，超时可改派，重启可恢复 | `apps/agentteams_bridge/`、`integrations/agentteams/`、`tests/agentteams/`、live runbook | bridge 与合同已完成；没有官方 live 服务，所以不能声称核心链已接通 |
 | Skill 工程化 | 20% | Skill 不是提示词附件，而是可发现、版本固定、可调用、可追踪、可回滚的运行时资产 | `skills/`、`skill_runtime/`、`/api/v1/skills/*`、`tests/skills/` | 本地 runtime 已验证；真实 Worker 的 discovery/tool invocation 仍待 live trace |
-| 工程实现与安全审计 | 30% | 确定性控制面拥有状态、授权、幂等、证据和最终验收；RXP 固化实验承诺链；benchmark 独立验证 adapter 证据 | RXP schemas/verifier、PostgreSQL profile、R2 token、hash-chain、evidence gate、persistent benchmark bundle | 本地/contract 证据不等于生产安全认证，也不证明真实 GPU/云资源 |
+| 工程实现与安全审计 | 30% | 确定性控制面拥有状态、授权、幂等、证据和最终验收；RXP 固化实验承诺链；benchmark 与 acceptance bundle 独立验证 adapter 证据 | RXP schemas/verifier、PostgreSQL 生产路径与四类角色、R2 token、append-only hash-chain、LISTEN/NOTIFY、PolarDB preflight、evidence gate、persistent bundle | 本地/contract 证据不等于生产安全认证，也不证明真实 GPU/AgentTeams/PolarDB/PITR |
 | 开源贡献 | 5% | 发布代码、协议文档、JSON Schema、Skill 包、adapter、负对照与可复现测试 | Apache-2.0 repository、README、runbooks、CI commands | 尚无正式 release/adoption 证据；RXP 是项目协议，不是行业标准 |
 
 ## 硬门槛的可执行解释
@@ -52,7 +52,7 @@
 | 产物与验收 | Worker submit，Leader check/accept | 下载 declared artifact，复算 SHA-256，核对 task/context | artifact URI/hash、result envelope、acceptance state |
 | 独立复核 | Reviewer 与 executor 身份分离 | Evidence gate 重算完整性与 review independence | reviewer actor、Evidence root、PASS verdict |
 | 决策与记忆 | Project 到达终态 | Decision 只引用完整 evidence set；缺 cell 显式列出 | Decision digest、Matrix root、missing list、final trace |
-| 恢复与补偿 | 重读官方 workflow 后续跑 | SQLite checkpoint；失败的 resume/replan/send 被 pause fence | recovery event chain、compensation state、无重复 Project |
+| 恢复与补偿 | 重读官方 workflow 后续跑 | PostgreSQL checkpoint/CAS/advisory lock 为生产路径；SQLite 仅开发 fallback；失败的 resume/replan/send 被 pause fence | recovery event chain、compensation state、无重复 Project/receipt |
 
 ## 已实现、已验证与待验收
 
@@ -63,6 +63,8 @@
 | Matrix structured dispatch 与 response correlation | ✓ | ✓ | — |
 | conflict/replan、timeout/reassign、restart/resume、compensation | ✓ | ✓ | — |
 | R2 Grant 进入恢复链 | ✓ | ✓ | — |
+| PostgreSQL bridge checkpoint/event/receipt、append-only 与最小权限 | ✓ | ✓，本地 16.14 | — PolarDB/PITR |
+| Fashion-MNIST 单 GPU FP32/AMP workload + acceptance verifier | ✓ | ✓ contract/negative tests | — official AgentTeams/GPU origin |
 | 3+ Worker、Skill `TOOL_INVOKED`、独立 review、终态 | ✓ verifier | ✓ fixture rejection/acceptance contract | — |
 | 14 个场景各自的真实 fault proof | ✓ fail-closed adapter/verifier | ✓ 缺证据会拒绝 | —；当前 70/70 `SKIP` |
 
@@ -81,8 +83,9 @@ live evidence。
 当前可安全使用的总述是：
 
 > EgoAgentOS 已实现并本地验证一个面向官方 AgentTeams Project/TeamHarness/Matrix 的
-> fail-closed bridge，以及 RXP 实验承诺与证据验收层；官方 live 集成和 14 场景 target
-> release benchmark 尚待部署环境验收，当前结果明确为 `SKIP`。
+> fail-closed bridge、PostgreSQL 生产数据合同、RXP 实验承诺层、真实 Fashion-MNIST 单
+> GPU adapter 与一键证据验收层；官方 AgentTeams/GPU origin、PolarDB/PITR 和 14 场景
+> target release benchmark 尚待部署环境验收，当前外部结果明确为 `UNVERIFIED`/`SKIP`。
 
 详细 release 判据见 [`semifinal-scorecard.md`](semifinal-scorecard.md)，live 操作见
 [`agentteams-live-runbook.md`](agentteams-live-runbook.md)，claim 状态见

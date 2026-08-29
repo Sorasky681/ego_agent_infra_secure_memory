@@ -8,8 +8,9 @@ PolarDB provisioning, managed backup, failover, or PITR.
 ```text
 PostgreSQL 16.14 on aarch64-unknown-linux-musl
 postgres:16-alpine
-schema migration: 001_control_plane.sql
-installed audit triggers: 4
+control-plane migrations: 001_control_plane.sql, 002_ledger_boundaries.sql
+AgentTeams bridge migration: 001_bridge_control_plane.sql
+security policies: security_roles.sql, agentteams_bridge_security.sql
 ```
 
 ## Reproduction
@@ -28,14 +29,27 @@ EGO_TEST_POSTGRES_URL='postgresql://egoagentos_test:<redacted>@127.0.0.1:55439/e
 Observed result:
 
 ```text
-..........                                                               [100%]
-10 passed
+...........................                                              [100%]
+27 passed
 ```
 
-The ten tests cover the full API persistence path, cross-record rollback, task row
-serialization, stale-version rejection, eight concurrent audit writers, same-ID tenant
-isolation, direct predecessor/tamper rejection, commit-only `LISTEN/NOTIFY`, migration
-replay/checksum drift, least-privilege grants/RLS, and concurrent idempotency.
+The 27 tests cover both production PostgreSQL paths:
+
+- control-plane API persistence, cross-record rollback, row-lock/optimistic concurrency,
+  tenant isolation, durable event cursors, commit-only `LISTEN/NOTIFY`, and migration
+  replay/checksum drift;
+- database-enforced append-only evidence, memory-candidate, validated-memory, audit,
+  bridge-event, and bridge-receipt ledgers;
+- runtime, auditor, evidence-writer, and memory-curator least-privilege roles plus RLS;
+- Memory Curator candidate-only writes and separate validator promotion;
+- AgentTeams JSONB checkpoints, CAS/advisory locking, restart recovery, serialized event
+  chains, receipt idempotency/uniqueness, and concurrent migration initialization;
+- fail-closed PolarDB-compatible preflight assertions for catalog policies, notifications,
+  topology markers, and fresh-schema replay.
+
+These tests used local PostgreSQL only. The PolarDB-specific TLS endpoint, engine marker,
+writer/read-only topology, managed backups, PITR restore, cloud IAM, and measured RPO/RTO
+remain `NOT RUN`.
 
 The executable assertions are the evidence source; this note is only an index to the
 command and observed environment.

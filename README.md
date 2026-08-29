@@ -8,7 +8,8 @@ EgoAgentOS 不是泛化聊天式 AI Scientist。它聚焦具身智能实验室�
 ```text
 Research Goal → Context → Hypothesis / Plan → Approval → Execution
 → Observation → Deterministic Evaluation → Independent Verification
-→ Decision → Archive → Validated Memory → Skill Candidate
+→ Decision → Archive → Memory Candidate → Independent Validation
+→ Validated Memory / Skill Candidate
 ```
 
 系统采用 **Deterministic Core + LLM Residual**：Agent 可以理解目标、提出假设和解释结果；状态迁移、风险策略、审批范围、指标计算、证据完整性、哈希与审计由确定性代码执行。Planner、Executor、Evaluator、Reviewer 相互分离，任何 Agent 都不能自证闭环。
@@ -43,10 +44,10 @@ docker compose up --build
 - OpenAPI：<http://localhost:8000/docs>
 - Health：<http://localhost:8000/api/v1/health>
 
-默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、PostgreSQL 16 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 PolarDB/PITR、AgentTeams、Nacos 或 Higress 在线状态。直接启动 API 且不设置 `EGO_DATABASE_URL` 时仍使用 SQLite 开发模式。
+默认场景明确标记为 **SYNTHETIC DEMO DATA**。它真实运行控制面、PostgreSQL 16 状态、审批、哈希、评测、证据门禁与审计，但不会声称已经使用 8×RTX 4090 训练，也不会伪造 PolarDB/PITR、AgentTeams、Nacos 或 Higress 在线状态。生产数据路径是 PostgreSQL；直接启动 API 且不设置 `EGO_DATABASE_URL` 时，才使用 SQLite 开发 fallback。
 
-截至 2026-08-29，本机已通过 `docker compose config` 和真实 PostgreSQL 16
-数据层的 10/10 集成测试；API/Web 镜像构建在拉取 Docker Hub metadata 时网络超时，
+截至 2026-08-29，本机已通过 `docker compose config` 和真实 PostgreSQL 16.14
+数据层的 27/27 集成测试；API/Web 镜像构建在拉取 Docker Hub metadata 时网络超时，
 因此本仓库不把这次 `docker compose up --build` 记作已验证镜像构建。评委网络可用时可
 直接走上述一键路径；原生启动路径不依赖镜像拉取：
 
@@ -99,13 +100,14 @@ flowchart TB
   H["Researcher / Human Approver"] --> UI["Research Cockpit"]
   UI --> CP["Deterministic Control Plane\nstate · policy · approval · evidence · audit"]
   CP --> A["Local deterministic role handlers\n7 Agent identity contracts"]
-  CP --> DB["SQLite developer backend\nPostgreSQL 16 verified backend"]
+  CP --> DB["PostgreSQL production path\nSQLite dev fallback"]
   CP --> X["Explicitly synthetic EgoLite execution"]
   CP --> SR["In-process Skill runtime\n6 packages · 3 allowlisted handlers"]
   S["Portable Skill contracts"] -. workflow contract .-> A
   T["4 MCP servers / 7 typed tools"] -. execution profile .-> CP
   AT["Official AgentTeams / Matrix\noptional live runtime"] -. Controller + TeamHarness .-> AB["Durable AgentTeams bridge\nreplan · R2 recovery · compensation"]
   AB -. validated artifacts .-> CP
+  GPU["Fashion-MNIST FP32 vs AMP\nreal single-GPU adapter"] -. unrun external workload .-> AB
   HG["Higress route policy"] -. not deployed .-> T
   NC["Nacos publish policy"] -. not deployed .-> S
 ```
@@ -125,7 +127,7 @@ INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
 
 任务 stage 与 run status 分离；所有迁移只能经过 control plane。非法跳转、证据不足、过期/错 scope/重放 token 都会产生结构化错误并保留审计事实。
 
-设计详解：[architecture](docs/architecture.md) · [PostgreSQL / recovery](docs/postgres-recovery-runbook.md) · [state machine](docs/state-machine.md) · [security](docs/security.md) · [observability](docs/observability.md) · [evaluation](docs/evaluation.md)
+设计详解：[architecture](docs/architecture.md) · [评委意见落实清单](docs/judge-feedback-implementation.md) · [PostgreSQL / recovery](docs/postgres-recovery-runbook.md) · [state machine](docs/state-machine.md) · [security](docs/security.md) · [observability](docs/observability.md) · [evaluation](docs/evaluation.md)
 
 ## 7 个 Agent Identity
 
@@ -137,9 +139,9 @@ INTAKE → CONTEXT → PLAN → PLAN_REVIEW → APPROVAL → EXECUTE → OBSERVE
 | Runtime | Worker | allowlisted 提交合同、观测与日志 | 任意 shell |
 | Evaluator | Worker | 确定性指标与 bootstrap | 修改 checkpoint |
 | Independent Reviewer | Worker | 计划与结果独立审查 | 启动被审实验 |
-| Memory Curator | Worker | validated memory 与 Skill candidate | 把推测写成事实 |
+| Memory Curator | Worker | 只追加 memory candidate 与 Skill candidate | 直接写 validated memory 或把推测写成事实 |
 
-机器可读身份位于 [`agents/`](agents/)。官方 `agentteams.io/v1beta1` 资源、契约锁和结构化 envelope 位于 [`integrations/agentteams/`](integrations/agentteams/)，可执行 bridge 位于 [`apps/agentteams_bridge/`](apps/agentteams_bridge/)。AgentTeams/TeamHarness 负责真实协作，EgoAgentOS 仍负责审批、证据验收和最终决策；Matrix 不是授权源。
+机器可读身份位于 [`agents/`](agents/)。官方 `agentteams.io/v1beta1` 资源、契约锁和结构化 envelope 位于 [`integrations/agentteams/`](integrations/agentteams/)，可执行 bridge 位于 [`apps/agentteams_bridge/`](apps/agentteams_bridge/)。AgentTeams/TeamHarness 负责真实协作，EgoAgentOS 仍负责审批、证据验收和最终决策；Matrix 不是授权源。Memory Curator 的候选项必须由独立的确定性 `memory-validator` 在 Evidence Gate 之后晋级，PostgreSQL 权限不允许 Curator 直接写 validated memory。
 
 ## 6 个 Skill Package 与可执行 Registry
 
@@ -179,6 +181,18 @@ uv run --python 3.12 --project mcp_servers pytest mcp_servers/tests
 这里没有万能 `shell(command)`。GPU server 默认不执行；显式开启后也只运行打包的 harmless synthetic worker。四个 server 默认使用 stdio，也支持显式 loopback Streamable HTTP profile；这不等于 Higress 或 AgentTeams 已连接。完整安全合同见 [mcp_servers/README.md](mcp_servers/README.md)。
 
 API 与 GPU MCP 共享 [`contracts/approval-token-v1.json`](contracts/approval-token-v1.json)。设置同一个至少 32 字节的 `EGO_MCP_APPROVAL_HMAC_SECRET` 后，API 审批会签发 MCP 可独立验签、限时且单次消费的 `egoap1` token；跨 Python 3.9/3.12 集成测试覆盖 dry-run 摘要一致、一次受控 synthetic launch 与 replay 拒绝。默认留空时，Web 使用 `egoap_` 会话 token 完成本地控制面 replay，但该 token 不具备 MCP 互操作性。
+
+## 成本受控的真实 GPU 验收工作负载
+
+[`experiments/fashion_mnist_amp/`](experiments/fashion_mnist_amp/) 提供真实 Fashion-MNIST
+单 GPU 对照实验：同一 TinyCNN、数据切分与 seed 下比较 FP32 和 AMP，硬性限制为一张
+CUDA GPU、最多 900 秒、0.25 GPU·hour 和 100 MiB 数据。adapter 会冻结环境、审批、
+AgentTeams/Matrix、原始预测、延迟、显存、独立复核和 Decision 所需的内容摘要，并由
+[`semifinal_acceptance/`](semifinal_acceptance/) 组装、离线重验一键验收包。
+
+这条真实 workload 路径已实现并通过 13 个合同/负例测试，但本机没有产生官方
+AgentTeams、GPU 或云端运行记录。当前允许状态仅为
+`CONTRACT_PASS_ORIGIN_UNVERIFIED`，不得表述为模型改进或 live 实验完成。
 
 ## RXP/1：可复现实验承诺与验收协议
 
@@ -233,10 +247,11 @@ make install
 make test
 ```
 
-截至 **2026-08-29** 的当前提交快照为 **136 个测试**：API 29、RXP 26、Skills 6、
-Semifinal proof 1、Benchmark 20、AgentTeams 20、MCP 23、Web 11。这个数字是带日期的提交证据，不是
-永久承诺；后续提交应以实时 `make test` 与 CI 输出为准。PostgreSQL 10/10 是另一个
-需要真实数据库的集成套件，不计入上述默认 136。
+截至 **2026-08-29** 的当前提交快照为 **209 个测试**：API 56、RXP 26、Skills 6、
+Semifinal proof 1、Benchmark 28、Acceptance 16、AgentTeams 28、Experiments 13、MCP 23、
+Web 12。这个数字是带日期的提交证据，不是永久承诺；后续提交应以实时 `make test` 与
+CI 输出为准。真实本地 PostgreSQL 16.14 集成套件为 27/27，因需要显式数据库 URL，
+不计入上述默认 209。
 
 分项运行：
 
@@ -263,10 +278,12 @@ make package
 ## 目录
 
 ```text
-apps/api/                 FastAPI + SQLite/PostgreSQL deterministic control plane
-apps/agentteams_bridge/   optional real AgentTeams Controller/Matrix bridge
+apps/api/                 FastAPI + PostgreSQL production / SQLite dev-fallback control plane
+apps/agentteams_bridge/   AgentTeams Controller/Matrix bridge + PostgreSQL backend
 apps/web/                 React Research Cockpit
 protocols/rxp/            RXP/1 models, schemas, grants, ledger, CLI
+experiments/               bounded real-workload adapters; no bundled live result
+semifinal_acceptance/      content-addressed one-command acceptance bundle
 skill_runtime/            digest-pinned Skill registry and allowlisted handlers
 agents/                   7 Agent identity contracts
 skills/                   6 reusable Skill packages
@@ -284,12 +301,12 @@ submission/               ≤500 字简介、答辩稿、演示与提交清单
 
 | Integration | 本仓库状态 | 不做的虚假声明 |
 |---|---|---|
-| AgentTeams | 可执行 Controller/Matrix bridge + 7 Worker/1 Team/1 Manager 资源 + 官方契约锁；本机无 live 配置，target benchmark 诚实 `SKIP` | contract/fixture 测试不冒充 live；只有真实握手与 trace 才可升级 claim |
+| AgentTeams | 可执行 Controller/Matrix bridge、PostgreSQL checkpoint/event/receipt backend、7 Worker/1 Team/1 Manager 资源与官方契约锁；本机无 live 配置，target benchmark 诚实 `SKIP` | contract/fixture 测试不冒充 live；只有真实握手与 trace 才可升级 claim |
 | Nacos | 6 个 Skill package + 本地进程内 registry/lifecycle reference | 不声称 Skill 已上线或 rollout 状态已持久化 |
-| PostgreSQL / PolarDB-PG | 真实 PostgreSQL 16 合同测试 10/10 PASS | PolarDB 云部署、备份策略与 PITR 明确为 `NOT RUN` |
+| PostgreSQL / PolarDB-PG | PostgreSQL 为生产数据路径；真实本地 16.14 合同测试 27/27 PASS，含最小权限、append-only、LISTEN/NOTIFY、迁移校验和与 preflight | PolarDB 云部署、备份策略、PITR 与实测 RPO/RTO 明确为 `NOT RUN` |
 | Higress | 精确 MCP route / credential policy contract | 不声称 gateway 已部署或完成 secret-isolation 负测 |
 | Aliyun SLS Skill | 只读官方 Skill 选择与 lock | 不声称已查询真实项目日志 |
-| GPU / EgoLite | synthetic fixtures + bounded launcher | 不声称跑过 8×RTX 4090 或真实数据 |
+| GPU / EgoLite | synthetic UI fixture；另有真实 Fashion-MNIST 单 GPU FP32/AMP adapter 与验收 verifier | adapter 已实现不等于已运行；官方 GPU/AgentTeams origin 仍为 `UNVERIFIED` |
 
 每条演示/答辩 claim 都应能回指当前仓库证据，见 [docs/claims-evidence.md](docs/claims-evidence.md)。
 
@@ -301,4 +318,4 @@ submission/               ≤500 字简介、答辩稿、演示与提交清单
 
 ## License
 
-Apache License 2.0。示例数字全部为 synthetic fixture，只用于复现系统行为；不构成模型性能声明。第三方与数据/模型边界分别见 [THIRD_PARTY.md](THIRD_PARTY.md)、[DATA_CARD.md](DATA_CARD.md)、[MODEL_CARD.md](MODEL_CARD.md)。
+Apache License 2.0。演示中的性能数字全部来自 synthetic fixture，只用于复现系统行为；真实 Fashion-MNIST adapter 当前不附带 live 结果，不构成模型性能声明。第三方与数据/模型边界分别见 [THIRD_PARTY.md](THIRD_PARTY.md)、[DATA_CARD.md](DATA_CARD.md)、[MODEL_CARD.md](MODEL_CARD.md)。
