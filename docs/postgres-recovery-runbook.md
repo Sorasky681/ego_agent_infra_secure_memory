@@ -37,16 +37,23 @@ For a remote PostgreSQL-compatible service, URL-encode credentials and require T
 
 ```bash
 EGO_DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require' \
+  EGO_DATABASE_MIGRATION_MODE=verify \
   uv run uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
 ```
 
+Use `apply` only for a migration-owner startup or the local Compose profile. Restricted
+runtime replicas should use `verify`, which performs an exact read-only comparison of all
+packaged migration versions and checksums.
+
 ## Schema and concurrency invariants
 
-On startup, the API takes a migration advisory lock, creates `schema_migrations`, and
-applies each packaged SQL migration once in one transaction. The initial migration
-creates the complete task, approval, evidence, memory, idempotency, and audit schema.
-Each applied file records a SHA-256 checksum; packaged SQL drift fails startup rather than
-silently changing the meaning of an already-applied version.
+In `apply` mode, the API takes a migration advisory lock, creates `schema_migrations`, and
+applies each packaged SQL migration once in one transaction. The migrations create the
+task, approval, evidence, memory-candidate, validated-memory, idempotency, and audit
+schema plus database-enforced ledger boundaries. Each applied file records a SHA-256
+checksum; packaged SQL drift fails startup rather than silently changing the meaning of
+an already-applied version. In `verify` mode no DDL is attempted and any missing,
+unexpected, or mismatched migration fails startup.
 
 PostgreSQL enforces these boundaries:
 
@@ -57,7 +64,9 @@ PostgreSQL enforces these boundaries:
    lock. A database trigger independently rejects a predecessor other than the current
    stream head, including direct SQL writes.
 5. `UPDATE`, `DELETE`, and `TRUNCATE` of `audit_events` are rejected by triggers.
-6. The `ego_stage_events` notification is emitted by an `AFTER INSERT` trigger and becomes
+6. `evidence`, `memory_candidates`, and validated `memories` are append-only; their
+   `UPDATE`, `DELETE`, and `TRUNCATE` operations are rejected by database triggers.
+7. The `ego_stage_events` notification is emitted by an `AFTER INSERT` trigger and becomes
    visible to `LISTEN` consumers only after commit. A rolled-back event is silent.
 
 `NOTIFY` is a low-latency wake-up, not the durable queue. Consumers checkpoint the audit
@@ -65,8 +74,10 @@ PostgreSQL enforces these boundaries:
 uses a dedicated session connection and must not be placed behind transaction pooling.
 
 The optional [security role SQL](../deploy/postgres/security_roles.sql) creates separate
-NOLOGIN runtime/auditor roles, least-privilege grants, and tenant RLS policies without
-embedding a password. A deployment owner must create LOGIN identities from its secret
+NOLOGIN runtime, auditor, evidence-writer, and memory-curator roles, least-privilege
+grants, and tenant RLS policies without embedding a password. Evidence Writer can mutate
+only the evidence ledger; Memory Curator can mutate only `memory_candidates`, never
+validated memory. A deployment owner must create LOGIN identities from its secret
 manager, grant these roles, and set `egoagentos.tenant_id` per connection.
 The RLS helper returns no tenant when that setting is absent, so runtime access fails closed.
 

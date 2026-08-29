@@ -36,7 +36,8 @@ The operator or DBA must provide:
 
 - a dedicated, disposable database whose name begins with `egoagentos_acceptance_`;
 - TLS writer endpoint and, for topology acceptance, a reader endpoint;
-- separate migration-owner, `egoagentos_runtime`, and `egoagentos_auditor` logins;
+- separate migration-owner, `egoagentos_runtime`, `egoagentos_auditor`,
+  `egoagentos_evidence_writer`, and `egoagentos_memory_curator` logins;
 - network allowlisting from the acceptance runner;
 - a cost ceiling, recovery window, and teardown owner before any managed restore.
 
@@ -55,6 +56,8 @@ export EGO_POLARDB_WRITER_URL='postgresql://...?...sslmode=require'
 export EGO_POLARDB_READER_URL='postgresql://...?...sslmode=require'
 export EGO_POLARDB_RUNTIME_URL='postgresql://...?...sslmode=require'
 export EGO_POLARDB_AUDITOR_URL='postgresql://...?...sslmode=require'
+export EGO_POLARDB_EVIDENCE_WRITER_URL='postgresql://...?...sslmode=require'
+export EGO_POLARDB_MEMORY_CURATOR_URL='postgresql://...?...sslmode=require'
 ```
 
 ## 2. Validate offline, then run read-only preflight
@@ -77,7 +80,8 @@ The report checks:
 - an exact match between live migration versions/checksums and packaged SQL;
 - the expected per-table tenant policy and both `USING`/`WITH CHECK` predicates;
 - append-only and stage notification triggers;
-- runtime/auditor table privileges and optional real role logins;
+- runtime/auditor/evidence-writer/memory-curator table privileges and optional real role
+  logins;
 - writer/reader topology without attempting a durable write.
 
 `polardb_identity=PASS` requires an advertised PolarDB or `pg_settings` marker when
@@ -110,9 +114,11 @@ consumer, reconnect replay, or frontend delivery.
 ## 4. Apply and verify least privilege
 
 `deploy/postgres/security_roles.sql` is intentionally separate from automatic schema
-migrations. It creates NOLOGIN group roles, revokes `PUBLIC` schema access, grants the
-runtime/auditor matrix, and enables tenant RLS. A DBA must review and apply it as the
-database owner, then create LOGIN identities through the platform secret manager.
+migrations. It creates four NOLOGIN group roles, revokes `PUBLIC` schema access, grants
+the least-privilege matrix, and enables tenant RLS. In particular, the evidence writer
+can mutate only `evidence`, while Memory Curator can mutate only `memory_candidates`;
+neither can update or delete a ledger row. A DBA must review and apply it as the database
+owner, then create LOGIN identities through the platform secret manager.
 
 ```bash
 psql "$EGO_POLARDB_WRITER_URL" \
@@ -122,8 +128,13 @@ psql "$EGO_POLARDB_WRITER_URL" \
 ```
 
 Re-run read-only preflight with runtime and auditor URL variables. Catalog grants are
-not equivalent to a successful dedicated-role login. `FORCE RLS` remains a separate
-reported control because table owners otherwise bypass ordinary RLS.
+not equivalent to a successful dedicated-role login; supply all four role URLs when
+`require_role_logins=true`. `FORCE RLS` remains a separate reported control because table
+owners otherwise bypass ordinary RLS.
+
+The migration owner should run migrations before starting restricted API replicas. Set
+`EGO_DATABASE_MIGRATION_MODE=verify` on those replicas: startup then compares the complete
+live migration version/checksum map with packaged SQL and performs no schema write.
 
 ## 5. Destructive fresh-schema replay
 
