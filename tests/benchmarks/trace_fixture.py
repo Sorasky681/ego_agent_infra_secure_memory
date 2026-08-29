@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
-from benchmarks.model import Scenario
+from benchmarks.model import Scenario, canonical_json, canonical_sha256
 from benchmarks.trace_verifier import SCENARIO_REQUIRED_EVENTS
 
 
@@ -16,13 +16,69 @@ def digest(label: str) -> str:
 
 def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
     task_id = "ego-task-%s" % scenario.id
+    project_id = "project-%s-%d" % (scenario.id, seed)
     correlation_id = "corr-%s-%d" % (scenario.id, seed)
+    trace_id = "trace-%s-%d" % (scenario.id, seed)
+    bridge_run_id = "run-%s-%d" % (scenario.id, seed)
     intent_digest = digest("intent:%s:%d" % (scenario.id, seed))
     receipt_digest = digest("receipt:%s:%d" % (scenario.id, seed))
     evidence_digest = digest("evidence:%s:%d" % (scenario.id, seed))
     matrix_root = "matrix-event-%s-%d" % (scenario.id, seed)
     workflow_digest = digest("workflow:%s:%d" % (scenario.id, seed))
-    chain_head = digest("bridge-head:%s:%d" % (scenario.id, seed))
+    bridge_items: List[Dict[str, Any]] = []
+
+    def bridge_item(kind: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        sequence = len(bridge_items) + 1
+        created_at = "2026-08-29T00:00:%02d+00:00" % sequence
+        envelope = {
+            "schema": "egoagentos.agentteams-envelope.v2",
+            "envelope_id": "env-%s-%d-%02d" % (scenario.id, seed, sequence),
+            "task_id": task_id,
+            "project_id": project_id,
+            "trace_id": trace_id,
+            "correlation_id": correlation_id,
+            "context_version": 1,
+            "attempt": 1,
+            "kind": kind,
+            "sender": "bridge-main",
+            "recipient": "matrix-executor",
+            "causation_id": None,
+            "body": body,
+            "body_sha256": canonical_sha256(body),
+            "created_at": created_at,
+        }
+        previous_hash = bridge_items[-1]["event_hash"] if bridge_items else "0" * 64
+        event_id = "evt-%s-%d-%02d" % (scenario.id, seed, sequence)
+        hash_payload = {
+            "event_id": event_id,
+            "run_id": bridge_run_id,
+            "kind": kind,
+            "envelope": envelope,
+            "previous_hash": previous_hash,
+            "created_at": created_at,
+        }
+        item = {
+            "sequence": sequence,
+            **hash_payload,
+            "event_hash": hashlib.sha256(
+                canonical_json(hash_payload).encode("utf-8")
+            ).hexdigest(),
+        }
+        bridge_items.append(item)
+        return item
+
+    created_bridge = bridge_item("TASK_REQUEST", {"objective": "bounded verifier contract"})
+    delegated_bridge = bridge_item(
+        "TASK_UPDATE", {"status": "delegated", "assignee": "matrix-executor"}
+    )
+    accepted_bridge = bridge_item(
+        "ARTIFACT_ACCEPTED", {"artifact_sha256": digest("accepted")}
+    )
+    approval_bridge = bridge_item(
+        "APPROVAL_GRANTED", {"risk_level": "R2", "approval_token_persisted": False}
+    )
+    terminal_bridge = bridge_item("TERMINAL", {"agentteams_status": "COMPLETED"})
+    chain_head = terminal_bridge["event_hash"]
     events: List[Dict[str, Any]] = []
 
     def event(event_type: str, actor: str, payload: Dict[str, Any]) -> None:
@@ -40,10 +96,31 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
     event(
         "task.created",
         "bridge-main",
-        {"intent_digest": intent_digest, "matrix_root": matrix_root},
+        {
+            "intent_digest": intent_digest,
+            "matrix_root": matrix_root,
+            "bridge_event_id": created_bridge["event_id"],
+            "bridge_event_hash": created_bridge["event_hash"],
+        },
     )
-    event("task.delegated", "bridge-main", {"assignee": "matrix-executor"})
-    event("task.accepted", "bridge-main", {"artifact_sha256": digest("accepted")})
+    event(
+        "task.delegated",
+        "bridge-main",
+        {
+            "assignee": "matrix-executor",
+            "bridge_event_id": delegated_bridge["event_id"],
+            "bridge_event_hash": delegated_bridge["event_hash"],
+        },
+    )
+    event(
+        "task.accepted",
+        "bridge-main",
+        {
+            "artifact_sha256": digest("accepted"),
+            "bridge_event_id": accepted_bridge["event_id"],
+            "bridge_event_hash": accepted_bridge["event_hash"],
+        },
+    )
     event(
         "skill.invoked",
         "worker-executor",
@@ -63,6 +140,8 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
             "grant_id": "grant-%s-%d" % (scenario.id, seed),
             "receipt_digest": receipt_digest,
             "matrix_root": matrix_root,
+            "bridge_event_id": approval_bridge["event_id"],
+            "bridge_event_hash": approval_bridge["event_hash"],
         },
     )
     for event_type in SCENARIO_REQUIRED_EVENTS[scenario.id]:
@@ -91,7 +170,11 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
     event(
         "task.completed",
         "worker-executor",
-        {"matrix_root": matrix_root, "bridge_event_hash": chain_head},
+        {
+            "matrix_root": matrix_root,
+            "bridge_event_id": terminal_bridge["event_id"],
+            "bridge_event_hash": chain_head,
+        },
     )
     event(
         "decision.committed",
@@ -107,12 +190,13 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
         "schema_version": "egoagentos.agentteams-trace/v1",
         "source": "AgentTeams",
         "execution_mode": "real-agentteams",
+        "external_origin_status": "UNVERIFIED",
         "seed": seed,
         "scenario_id": scenario.id,
-        "project_id": "project-%s-%d" % (scenario.id, seed),
+        "project_id": project_id,
         "task_id": task_id,
         "correlation_id": correlation_id,
-        "trace_id": "trace-%s-%d" % (scenario.id, seed),
+        "trace_id": trace_id,
         "context_version": 1,
         "agents": [
             {
@@ -150,7 +234,7 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
         "bridge": {
             "api_version": "v1",
             "endpoint": "/api/v1/agentteams/runs/run-fixture",
-            "run_id": "run-%s-%d" % (scenario.id, seed),
+            "run_id": bridge_run_id,
         },
         "official_contract": {
             "repository": "https://github.com/agentscope-ai/AgentTeams",
@@ -168,8 +252,12 @@ def build_trace(scenario: Scenario, seed: int) -> Dict[str, Any]:
         "snapshots": [{"state": "COMPLETED", "workflow_sha256": workflow_digest}],
         "bridge_event_chain": {
             "valid": True,
-            "total": len(events),
+            "hash_algorithm": "sha256-canonical-json-v1",
+            "external_origin_status": "UNVERIFIED",
+            "total": len(bridge_items),
             "head": chain_head,
+            "source_ledger_total": len(bridge_items),
+            "items": bridge_items,
         },
         "replay": {
             "run_ids": ["replay-a-%d" % seed, "replay-b-%d" % seed],

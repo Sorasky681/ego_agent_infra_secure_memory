@@ -102,7 +102,6 @@ def live_trace(
         for event in trace["events"]:
             if event["type"] == "decision.committed":
                 event["payload"].update(decision_binding)
-    trace["bridge_event_chain"]["total"] = len(trace["events"])
     return trace
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Tuple
@@ -40,6 +41,91 @@ CANONICAL_SCENARIO_EVENTS = {
     scenario_id: set(event_types)
     for scenario_id, event_types in SCENARIO_REQUIRED_EVENTS.items()
 }
+BRIDGE_LEDGER_HASH_ALGORITHM = "sha256-canonical-json-v1"
+_SECRET_FIELD_NAMES = {
+    "access_token",
+    "api_key",
+    "approval_token",
+    "auth_token",
+    "authorization",
+    "client_secret",
+    "password",
+    "private_key",
+    "refresh_token",
+}
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
+    re.compile(r"(?i)^bearer\s+[A-Za-z0-9._~+/=-]{12,}$"),
+    re.compile(r"^sk-[A-Za-z0-9_-]{20,}$"),
+    re.compile(r"^(?:ghp|github_pat)_[A-Za-z0-9_]{20,}$"),
+)
+
+
+def _assert_secret_free(value: Any, path: str = "bridge_event_chain") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in _SECRET_FIELD_NAMES:
+                raise BridgeError(
+                    "bridge_ledger_contains_secret",
+                    "durable bridge ledger cannot be exported with secret fields",
+                    details={"path": "%s.%s" % (path, key)},
+                )
+            _assert_secret_free(item, "%s.%s" % (path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_secret_free(item, "%s[%d]" % (path, index))
+    elif isinstance(value, str) and any(
+        pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS
+    ):
+        raise BridgeError(
+            "bridge_ledger_contains_secret",
+            "durable bridge ledger cannot be exported with secret material",
+            details={"path": path},
+        )
+
+
+def _export_bridge_event_chain(ledger: Mapping[str, Any], run_id: str) -> Dict[str, Any]:
+    """Export every secret-free field needed to recompute the durable event chain."""
+
+    if ledger.get("chain_valid") is not True:
+        raise BridgeError("bridge_event_chain_invalid", "bridge event hash chain is invalid")
+    source_items = ledger.get("items")
+    if not isinstance(source_items, list) or not source_items:
+        raise BridgeError("bridge_event_chain_empty", "bridge event hash chain is empty")
+    items: List[Dict[str, Any]] = []
+    for sequence, source in enumerate(source_items, start=1):
+        if not isinstance(source, dict):
+            raise BridgeError(
+                "bridge_event_chain_invalid", "bridge event ledger item is not an object"
+            )
+        envelope = source.get("envelope")
+        _assert_secret_free(envelope, "bridge_event_chain.items[%d].envelope" % (sequence - 1))
+        items.append(
+            {
+                "sequence": sequence,
+                "event_id": source.get("event_id"),
+                "run_id": run_id,
+                "kind": source.get("kind"),
+                "envelope": envelope,
+                "previous_hash": source.get("previous_hash"),
+                "event_hash": source.get("event_hash"),
+                "created_at": source.get("created_at"),
+            }
+        )
+    total = ledger.get("total")
+    if total != len(items):
+        raise BridgeError(
+            "bridge_event_chain_invalid", "bridge event ledger total does not match its items"
+        )
+    return {
+        "valid": True,
+        "hash_algorithm": BRIDGE_LEDGER_HASH_ALGORITHM,
+        "external_origin_status": "UNVERIFIED",
+        "total": total,
+        "head": items[-1]["event_hash"],
+        "source_ledger_total": total,
+        "items": items,
+    }
 
 
 def _live_binding(scenario: Any, scenario_id: str) -> Dict[str, Any]:
@@ -142,6 +228,7 @@ def _build_verified_trace(
     ledger = service.store.events(run.id)
     if not ledger.get("chain_valid"):
         raise BridgeError("bridge_event_chain_invalid", "bridge event hash chain is invalid")
+    bridge_event_chain = _export_bridge_event_chain(ledger, run.id)
     skill_payload = service.skill_evidence(run.id)
     final_ego_task = service.ego.get_task(run.ego_task_id)
     gate = final_ego_task.get("gate_result") or {}
@@ -341,6 +428,7 @@ def _build_verified_trace(
             "matrix_root": rxp["matrix_root"],
             "matrix_event_id": checkpoint.get("approval_granted_matrix_event_id"),
             "bridge_event_id": approval["event_id"],
+            "bridge_event_hash": approval["event_hash"],
             "approval_token_persisted": False,
         },
     )
@@ -411,6 +499,7 @@ def _build_verified_trace(
         "source": "AgentTeams",
         "execution_mode": "real-agentteams",
         "synthetic": False,
+        "external_origin_status": "UNVERIFIED",
         "seed": seed,
         "scenario_id": scenario_id,
         "project_id": run.agentteams_project_id,
@@ -446,19 +535,14 @@ def _build_verified_trace(
             ],
         },
         "snapshots": snapshots,
-        "bridge_event_chain": {
-            "valid": ledger["chain_valid"],
-            "total": len(events),
-            "head": ledger["items"][-1]["event_hash"],
-            "source_ledger_total": ledger["total"],
-        },
+        "bridge_event_chain": bridge_event_chain,
         "replay": checkpoint.get(
             "benchmark_replay",
             {"run_ids": [], "semantic_digests": []},
         ),
         "truth_boundary": (
-            "PASS proves this AgentTeams collaboration path and its mapped evidence; "
-            "it does not convert dry-run fixtures into runtime evidence."
+            "The recomputed bridge ledger proves content integrity only; external AgentTeams "
+            "origin remains UNVERIFIED and dry-run fixtures are not runtime evidence."
         ),
     }
 

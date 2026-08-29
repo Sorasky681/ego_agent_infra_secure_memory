@@ -57,6 +57,7 @@ def test_trace_and_result_schemas_encode_the_truth_gates() -> None:
     )
     assert trace["properties"]["source"] == {"const": "AgentTeams"}
     assert trace["properties"]["execution_mode"] == {"const": "real-agentteams"}
+    assert trace["properties"]["external_origin_status"] == {"const": "UNVERIFIED"}
     assert trace["properties"]["agents"]["minItems"] == 3
     assert {"events", "rxp", "principals", "replay"} <= set(
         trace["required"]
@@ -64,6 +65,14 @@ def test_trace_and_result_schemas_encode_the_truth_gates() -> None:
     assert CANONICAL_SCENARIO_EVENTS == {
         key: set(value) for key, value in SCENARIO_REQUIRED_EVENTS.items()
     }
+    bridge_chain = trace["properties"]["bridge_event_chain"]
+    assert {
+        "hash_algorithm",
+        "external_origin_status",
+        "source_ledger_total",
+        "items",
+    } <= set(bridge_chain["required"])
+    assert bridge_chain["properties"]["items"]["items"]["additionalProperties"] is False
 
     result = json.loads(
         (ROOT / "integrations/agentteams/result-envelope.schema.json").read_text()

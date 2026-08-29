@@ -148,6 +148,73 @@ def test_schema_aware_verifier_accepts_complete_trace() -> None:
     assert verified.agent_roles == ("planner", "reviewer", "runtime")
     assert verified.facts["task_completed"] is True
     assert verified.facts["exactly_once"] is True
+    assert verified.facts["hash_agreement"] is True
+    assert verified.facts["bridge_event_chain_total"] == 5
+
+
+def _tamper_bridge_sequence(trace: Dict[str, Any]) -> None:
+    trace["bridge_event_chain"]["items"][1]["sequence"] = 99
+
+
+def _tamper_bridge_previous_hash(trace: Dict[str, Any]) -> None:
+    trace["bridge_event_chain"]["items"][1]["previous_hash"] = "f" * 64
+
+
+def _tamper_bridge_event_hash(trace: Dict[str, Any]) -> None:
+    trace["bridge_event_chain"]["items"][1]["event_hash"] = "f" * 64
+
+
+def _tamper_bridge_envelope(trace: Dict[str, Any]) -> None:
+    trace["bridge_event_chain"]["items"][1]["envelope"]["recipient"] = "forged-worker"
+
+
+def _tamper_bridge_created_at(trace: Dict[str, Any]) -> None:
+    item = trace["bridge_event_chain"]["items"][1]
+    item["created_at"] = "2026-08-29T01:02:03+00:00"
+    item["envelope"]["created_at"] = item["created_at"]
+
+
+def _tamper_bridge_head(trace: Dict[str, Any]) -> None:
+    trace["bridge_event_chain"]["head"] = "f" * 64
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (_tamper_bridge_sequence, "sequence is not contiguous"),
+        (_tamper_bridge_previous_hash, "previous_hash mismatch"),
+        (_tamper_bridge_event_hash, "event_hash mismatch"),
+        (_tamper_bridge_envelope, "event_hash mismatch"),
+        (_tamper_bridge_created_at, "event_hash mismatch"),
+        (_tamper_bridge_head, "head mismatch"),
+    ],
+    ids=["sequence", "previous-hash", "event-hash", "envelope", "created-at", "head"],
+)
+def test_bridge_ledger_chain_is_recomputed_instead_of_trusting_valid(
+    mutation: Any, message: str
+) -> None:
+    scenario = _happy()
+    trace = build_trace(scenario, 18)
+    assert trace["bridge_event_chain"]["valid"] is True
+    mutation(trace)
+    payload = json.dumps(trace, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    with pytest.raises(TraceValidationError, match=message):
+        verify_trace_bytes(payload, scenario=scenario, seed=18)
+
+
+@pytest.mark.parametrize("location", ["trace", "chain"])
+def test_external_agentteams_origin_cannot_be_promoted_by_adapter_claim(
+    location: str,
+) -> None:
+    scenario = _happy()
+    trace = build_trace(scenario, 18)
+    if location == "trace":
+        trace["external_origin_status"] = "VERIFIED"
+    else:
+        trace["bridge_event_chain"]["external_origin_status"] = "VERIFIED"
+    payload = json.dumps(trace, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    with pytest.raises(TraceValidationError, match="external origin must remain UNVERIFIED"):
+        verify_trace_bytes(payload, scenario=scenario, seed=18)
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@ from apps.agentteams_bridge.errors import BridgeError, UpstreamError
 from apps.agentteams_bridge.models import GrantRequest, RunState, StartRunRequest
 from apps.agentteams_bridge.transport import TransportFailure
 from apps.api.models import FinalizeTaskRequest
+from benchmarks.trace_verifier import _verify_bridge_event_chain
 from integrations.agentteams.benchmark_adapter import (
     REQUIRED_TRACE_EVENTS,
     TRACE_SCHEMA_VERSION,
@@ -651,7 +652,28 @@ def test_verified_benchmark_trace_has_required_real_agentteams_evidence(
         principal["id"] for principal in trace["principals"]
     }
     assert {event["actor"] for event in trace["events"]} <= declared_actors
-    assert trace["bridge_event_chain"]["total"] == len(trace["events"])
+    chain = trace["bridge_event_chain"]
+    assert trace["external_origin_status"] == "UNVERIFIED"
+    assert chain["external_origin_status"] == "UNVERIFIED"
+    assert chain["hash_algorithm"] == "sha256-canonical-json-v1"
+    assert chain["total"] == chain["source_ledger_total"] == len(chain["items"])
+    assert [item["sequence"] for item in chain["items"]] == list(
+        range(1, chain["total"] + 1)
+    )
+    assert chain["head"] == chain["items"][-1]["event_hash"]
+    assert "trace-token-not-persisted" not in json.dumps(chain)
+    verified_head, verified_total, verified_events = _verify_bridge_event_chain(
+        chain,
+        run_id=trace["bridge"]["run_id"],
+        task_id=trace["task_id"],
+        project_id=trace["project_id"],
+        trace_id=trace["trace_id"],
+        correlation_id=trace["correlation_id"],
+        context_version=trace["context_version"],
+    )
+    assert verified_head == chain["head"]
+    assert verified_total == chain["total"]
+    assert len(verified_events) == chain["total"]
     assert trace["bridge"]["api_version"] == "0.3.0"
     assert trace["bridge"]["benchmark_adapter_version"] == "rxp-bench/v1"
     assert trace["official_contract"]["main_commit"] == (
