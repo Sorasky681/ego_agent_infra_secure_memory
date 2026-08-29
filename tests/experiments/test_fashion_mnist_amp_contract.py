@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -89,7 +90,7 @@ def raw_fixture() -> dict[str, object]:
             "config_file_sha256": "1" * 64,
             "dataset_manifest_sha256": "2" * 64,
             "git_commit": "a" * 40,
-            "git_commit_sha256": "3" * 64,
+            "git_commit_sha256": hashlib.sha256(("a" * 40).encode("ascii")).hexdigest(),
             "environment_lock_sha256": "7" * 64,
             "approval_receipt_sha256": "4" * 64,
             "agentteams_receipt_sha256": "5" * 64,

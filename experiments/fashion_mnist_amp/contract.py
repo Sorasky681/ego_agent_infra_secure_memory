@@ -254,6 +254,7 @@ def evaluate_raw_result(
 
     for digest_name in (
         "dataset_manifest_sha256",
+        "config_file_sha256",
         "git_commit_sha256",
         "approval_receipt_sha256",
         "agentteams_receipt_sha256",
@@ -262,6 +263,17 @@ def evaluate_raw_result(
         "trained_model_sha256",
     ):
         _require(_is_sha256(raw.get(digest_name)), f"{digest_name} is invalid")
+    git_commit = raw.get("git_commit")
+    _require(
+        isinstance(git_commit, str)
+        and len(git_commit) in (40, 64)
+        and all(character in "0123456789abcdef" for character in git_commit),
+        "git_commit is invalid",
+    )
+    _require(
+        raw["git_commit_sha256"] == hashlib.sha256(git_commit.encode("ascii")).hexdigest(),
+        "git commit digest mismatch",
+    )
     for identifier_name in ("run_id", "physical_launch_id"):
         identifier = raw.get(identifier_name)
         _require(

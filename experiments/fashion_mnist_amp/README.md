@@ -13,7 +13,9 @@ The runner is intentionally strict:
 - wall time is capped at 900 seconds / 0.25 GPU-hours;
 - dataset bytes, code identity, approval receipt, AgentTeams receipt and Matrix plan are
   content-bound;
-- every prediction and every latency repetition is retained as raw evidence;
+- every prediction and every latency repetition is retained as raw evidence, and the
+  trained tensor state is written in a deterministic binary format whose digest is
+  recomputable from the artifact bytes;
 - the CPU-only verifier recomputes the final Decision and rejects duplicates, NaN,
   digest drift, missing receipts, multi-GPU visibility, or budget overrun.
 

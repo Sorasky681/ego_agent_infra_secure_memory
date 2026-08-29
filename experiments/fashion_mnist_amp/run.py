@@ -13,6 +13,7 @@ import json
 import os
 import random
 import re
+import struct
 import sys
 import time
 from pathlib import Path
@@ -110,7 +111,7 @@ def _trace_event(
 
 def _run_torch_workload(
     config: Dict[str, Any], data_root: Path, started: float
-) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], bytes]:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     visible_ids = [item.strip() for item in visible.split(",") if item.strip()]
     if len(visible_ids) != 1 or visible_ids[0] == "-1":
@@ -214,14 +215,22 @@ def _run_torch_workload(
             optimizer.step()
         _trace_event(events, "training.epoch.completed", {"epoch": epoch + 1})
 
-    model_digest = hashlib.sha256()
+    model_blob = bytearray(b"EGOAGENTOS-MODEL-STATE-V1\n")
     for name, tensor in sorted(model.state_dict().items()):
         value = tensor.detach().cpu().contiguous()
-        model_digest.update(name.encode("utf-8") + b"\0")
-        model_digest.update(str(value.dtype).encode("ascii") + b"\0")
-        model_digest.update(canonical_bytes(list(value.shape)) + b"\0")
-        model_digest.update(value.numpy().tobytes(order="C"))
-    trained_model_sha256 = model_digest.hexdigest()
+        name_bytes = name.encode("utf-8")
+        tensor_bytes = value.numpy().tobytes(order="C")
+        metadata = canonical_bytes(
+            {"dtype": str(value.dtype), "shape": list(value.shape), "bytes": len(tensor_bytes)}
+        )
+        model_blob.extend(struct.pack(">I", len(name_bytes)))
+        model_blob.extend(name_bytes)
+        model_blob.extend(struct.pack(">I", len(metadata)))
+        model_blob.extend(metadata)
+        model_blob.extend(struct.pack(">Q", len(tensor_bytes)))
+        model_blob.extend(tensor_bytes)
+    model_state_bytes = bytes(model_blob)
+    trained_model_sha256 = hashlib.sha256(model_state_bytes).hexdigest()
     _trace_event(events, "model.frozen", {"trained_model_sha256": trained_model_sha256})
 
     model.eval()
@@ -293,7 +302,7 @@ def _run_torch_workload(
         "latency_ms": {"baseline": baseline_latency, "candidate": candidate_latency},
         "max_memory_bytes": {"baseline": baseline_memory, "candidate": candidate_memory},
     }
-    return device_evidence, metrics, events
+    return device_evidence, metrics, events, model_state_bytes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -343,7 +352,7 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     output_root = _prepare_output(Path(arguments.output_dir))
     data_root = Path(arguments.data_root).resolve()
     started = time.monotonic()
-    device, metrics, events = _run_torch_workload(config, data_root, started)
+    device, metrics, events, model_state_bytes = _run_torch_workload(config, data_root, started)
     duration_seconds = time.monotonic() - started
     dataset_manifest = _tree_manifest(data_root)
     if int(dataset_manifest["total_bytes"]) > int(config["budget"]["max_download_bytes"]):
@@ -392,14 +401,18 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     raw_path = output_root / "raw-metrics.json"
     decision_path = output_root / "decision.json"
     trace_path = output_root / "trace.jsonl"
+    model_path = output_root / "model-state.bin"
     raw_path.write_bytes(canonical_bytes(raw) + b"\n")
     decision_path.write_bytes(canonical_bytes(decision) + b"\n")
     trace_path.write_text(
         "".join(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n" for event in events),
         encoding="utf-8",
     )
+    model_path.write_bytes(model_state_bytes)
+    if _sha256_file(model_path) != raw["trained_model_sha256"]:
+        raise ContractError("persisted model-state digest mismatch")
     manifest = file_manifest(
-        output_root, [dataset_manifest_path, raw_path, decision_path, trace_path]
+        output_root, [dataset_manifest_path, raw_path, decision_path, trace_path, model_path]
     )
     manifest["artifact_root"] = canonical_sha256(manifest["files"])
     manifest_path = output_root / "artifact-manifest.json"
