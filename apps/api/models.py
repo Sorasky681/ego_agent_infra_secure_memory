@@ -136,6 +136,9 @@ class LiveSourceBinding(StrictModel):
     trace_id: str = Field(min_length=8, max_length=200)
     correlation_id: str = Field(min_length=8, max_length=200)
     context_version: int = Field(ge=1)
+    origin_authentication: Literal["UNVERIFIED_OPERATOR_ASSERTION"] = (
+        "UNVERIFIED_OPERATOR_ASSERTION"
+    )
 
 
 class LiveExecutionContract(StrictModel):

@@ -341,7 +341,15 @@ class AgentTeamsBridge:
             "correlation_id": request.correlation_id,
             "context_version": request.context_version,
         }
-        if ego_task.get("live_source") != expected_source:
+        actual_source = ego_task.get("live_source")
+        if (
+            not isinstance(actual_source, dict)
+            or any(actual_source.get(key) != value for key, value in expected_source.items())
+            or actual_source.get(
+                "origin_authentication", "UNVERIFIED_OPERATOR_ASSERTION"
+            )
+            != "UNVERIFIED_OPERATOR_ASSERTION"
+        ):
             raise BridgeError(
                 "ego_live_binding_conflict",
                 "AgentTeams run identity does not match the task's frozen live source binding",
@@ -564,6 +572,8 @@ class AgentTeamsBridge:
             "context_version": run.context_version,
             "execution_mode": "real-agentteams" if run.mode == "live" else "dry-run",
             "synthetic": run.mode != "live",
+            "external_origin_status": "UNVERIFIED",
+            "live_claim_allowed": False,
             "inputs_ready_for_assembly": inputs_ready,
             "bundle_assembled": False,
             "integrity": {
@@ -1140,7 +1150,14 @@ class AgentTeamsBridge:
             "correlation_id": run.correlation_id,
             "context_version": run.context_version,
         }
-        if task.get("synthetic_demo") is not False or task.get("live_source") != expected:
+        actual = task.get("live_source")
+        binding_mismatch = (
+            not isinstance(actual, dict)
+            or any(actual.get(key) != value for key, value in expected.items())
+            or actual.get("origin_authentication", "UNVERIFIED_OPERATOR_ASSERTION")
+            != "UNVERIFIED_OPERATOR_ASSERTION"
+        )
+        if task.get("synthetic_demo") is not False or binding_mismatch:
             raise BridgeError(
                 "ego_live_binding_conflict",
                 "EgoAgentOS task no longer matches the persisted live run identity",

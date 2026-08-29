@@ -292,6 +292,11 @@ def test_live_finalization_recomputes_metrics_gates_and_completes_idempotently(
     assert payload["task"]["decision"] == "KEEP"
     assert payload["task"]["gate_result"]["status"] == "pass"
     assert payload["receipt"]["synthetic"] is False
+    assert payload["receipt"]["contract_gate_status"] == "pass"
+    assert payload["receipt"]["verification_status"] == "CONTRACT_PASS_ORIGIN_UNVERIFIED"
+    assert payload["receipt"]["external_origin_status"] == "UNVERIFIED"
+    assert payload["receipt"]["live_claim_allowed"] is False
+    assert payload["task"]["verification"]["live_claim_allowed"] is False
     assert set(payload["receipt"]["evidence_digests"]) == {
         "code",
         "config",

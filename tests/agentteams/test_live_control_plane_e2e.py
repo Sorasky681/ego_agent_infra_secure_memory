@@ -180,3 +180,5 @@ def test_fake_agentteams_transport_drives_real_control_plane_finalization(
         index = bridge.acceptance_input_index(run.id)
         assert index["inputs_ready_for_assembly"] is True
         assert index["bundle_assembled"] is False
+        assert index["external_origin_status"] == "UNVERIFIED"
+        assert index["live_claim_allowed"] is False
