@@ -17,10 +17,13 @@ from .models import (
     ApprovalDecisionRequest,
     AutorunRequest,
     DemoResetRequest,
+    RXPVerifyRequest,
 )
 from .provenance import canonical_sha256
 from .service import ResearchOpsService
 from .store import SQLiteStore
+from .rxp_runtime import demo_ledger, schema_catalog, verify_uploaded_ledger
+from protocols.rxp import RXPError
 
 
 def _request_id(request: Request) -> str:
@@ -191,6 +194,26 @@ def create_app(
     @application.get("/api/v1/integrations", tags=["system"])
     def integrations(request: Request) -> Dict[str, Any]:
         return request.app.state.service.integrations()
+
+    @application.get("/api/v1/rxp/schemas", tags=["rxp"])
+    def rxp_schemas() -> Dict[str, Any]:
+        return schema_catalog()
+
+    @application.get("/api/v1/rxp/demo", tags=["rxp", "demo"])
+    def rxp_demo() -> Dict[str, Any]:
+        return demo_ledger()
+
+    @application.post("/api/v1/rxp/verify", tags=["rxp"])
+    def rxp_verify(body: RXPVerifyRequest) -> Dict[str, Any]:
+        try:
+            return verify_uploaded_ledger(body.ledger)
+        except RXPError as error:
+            raise ControlPlaneError(
+                "rxp_%s" % error.code,
+                error.message,
+                422,
+                error.details,
+            ) from error
 
     @application.get("/api/v1/dashboard", tags=["research"])
     def dashboard(request: Request) -> Dict[str, Any]:

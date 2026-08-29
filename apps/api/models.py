@@ -308,6 +308,10 @@ class DemoResetRequest(StrictModel):
     idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=128)
 
 
+class RXPVerifyRequest(StrictModel):
+    ledger: Dict[str, Any]
+
+
 class IntegrationState(StrictModel):
     id: str
     name: str
