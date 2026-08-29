@@ -9,6 +9,31 @@ The seeded values are always labelled **SYNTHETIC DEMO DATA**. HiClaw, Nacos, an
 optional adapter metadata and are never reported as live unless a future adapter performs a
 verified handshake.
 
+## External live task and finalization contract
+
+`POST /api/v1/tasks` is separate from the demo reset path. Its strict request requires
+`synthetic: false`, an immutable AgentTeams `live_source` binding, a frozen `ResearchGoal`, and
+an exact R2/R3 `execution_contract`. Omitting `synthetic`, sending `true`, reusing a task id, or
+submitting an action payload without its matching config digest fails closed. A live task never
+receives the demo's generated artifacts or modeled metrics.
+
+After the AgentTeams pre-approval DAG completes, the bridge advances only the legal
+`INTAKE -> CONTEXT -> PLAN -> PLAN_REVIEW -> APPROVAL` path. The human decision still produces a
+scope-bound, expiring, single-use token; consuming it is the only way to enter `EXECUTE`.
+
+Two typed evidence routes are available after that point:
+
+- `POST /api/v1/tasks/{task_id}/evidence` ingests one version- and generation-bound record;
+- `POST /api/v1/tasks/{task_id}/finalize` atomically ingests the remaining evidence and advances
+  `EXECUTE -> OBSERVE -> EVALUATE -> VERIFY -> DECIDE -> ... -> COMPLETED`.
+
+The terminal route requires exactly the seven evidence kinds, successful AgentTeams receipts,
+a GPU receipt for metric evidence, raw paired samples whose digest matches, byte-for-byte
+deterministic metric recomputation, and an independent PASS review binding the exact non-review
+evidence digests. `KEEP`, `DROP`, or `INCONCLUSIVE` is derived from the recomputed results; it is
+not accepted from the caller. Any missing item, stale version, digest mismatch, failed receipt,
+or forged reviewer rolls the transaction back without terminal progress.
+
 ## Run locally
 
 From the repository root:

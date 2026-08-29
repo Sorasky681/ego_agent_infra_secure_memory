@@ -13,6 +13,8 @@ from apps.agentteams_bridge.models import canonical_json
 from apps.agentteams_bridge.service import AgentTeamsBridge
 from apps.agentteams_bridge.store import BridgeStore
 from apps.agentteams_bridge.transport import HTTPResponse
+from apps.api.evaluator import evaluate_paired_metric
+from apps.api.provenance import canonical_sha256 as api_canonical_sha256
 
 
 WORKER_SKILLS = {
@@ -24,6 +26,10 @@ WORKER_SKILLS = {
     "ego-reviewer": ["evidence-gate"],
     "ego-memory-curator": ["research-memory"],
 }
+
+LIVE_OBJECTIVE = "Run a bounded embodied-AI ablation with independent review"
+LIVE_TRACE_ID = "trace-agentteams-live"
+LIVE_CORRELATION_ID = "corr-agentteams-live"
 
 
 class MutableClock:
@@ -56,10 +62,25 @@ class FakeTransport:
         self.workflow: Dict[str, Any] = self._workflow([])
         self.ego_task: Dict[str, Any] = {
             "id": "task-live",
+            "generation": "gen_live_fixture",
+            "version": 1,
+            "objective": LIVE_OBJECTIVE,
             "stage": "INTAKE",
+            "scenario": "external_live",
             "synthetic_demo": False,
             "pending_approval": None,
+            "owner_agent": "research-pi",
+            "decision": None,
+            "gate_result": {"status": "not_run", "independent_reviewer": None},
+            "live_source": {
+                "source": "agentteams",
+                "team": "ego-researchops",
+                "trace_id": LIVE_TRACE_ID,
+                "correlation_id": LIVE_CORRELATION_ID,
+                "context_version": 1,
+            },
         }
+        self.finalization_requests: List[Dict[str, Any]] = []
         self.artifacts: Dict[str, bytes] = {}
         self.spawns_payload: Dict[str, Any] = {"project_id": "", "workers": []}
         self.spawn_messages_payload: Dict[str, Dict[str, Any]] = {}
@@ -164,12 +185,46 @@ class FakeTransport:
         if path == "/api/v1/tasks/task-live" and method == "GET":
             return self._response(200, self.ego_task)
         if path == "/api/v1/tasks/task-live/advance" and method == "POST":
+            target = json_body["target"]
             self.ego_task = {
                 **self.ego_task,
-                "stage": "EXECUTE",
-                "pending_approval": None,
+                "stage": target,
+                "version": int(self.ego_task.get("version", 1)) + 1,
+                "pending_approval": (
+                    {
+                        "id": "apr-live-fixture",
+                        "status": "pending",
+                        "approver": None,
+                        "action_digest": "a" * 64,
+                    }
+                    if target == "APPROVAL"
+                    else None
+                ),
             }
             return self._response(200, {"task": self.ego_task})
+        if path == "/api/v1/tasks/task-live/finalize" and method == "POST":
+            self.finalization_requests.append(json_body)
+            self.ego_task = {
+                **self.ego_task,
+                "stage": "COMPLETED",
+                "version": int(self.ego_task.get("version", 1)) + 7,
+                "decision": "KEEP",
+                "current_agent": "research-pi",
+                "gate_result": {
+                    "status": "pass",
+                    "independent_reviewer": "ego-reviewer",
+                },
+            }
+            return self._response(
+                200,
+                {
+                    "task": self.ego_task,
+                    "receipt": {
+                        "schema": "egoagentos.live-finalization-receipt/v1",
+                        "decision": "KEEP",
+                    },
+                },
+            )
         if "/workflow" in path and method == "GET":
             return self._response(200, self.workflow)
         if path.endswith("/replan") and method == "POST":
@@ -226,12 +281,81 @@ class FakeTransport:
         return self._response(404, {"error": "unhandled fixture route", "path": path})
 
     def complete_all_with_contracts(self, run: Any) -> None:
+        contents: Dict[str, bytes] = {}
+        evidence_stages = {"CONTEXT", "PLAN", "EXECUTE", "OBSERVE", "EVALUATE"}
+        for task in run.task_graph:
+            if task.stage == "EVALUATE":
+                raw_samples = {
+                    "score": {"baseline": [1.0, 1.1], "candidate": [2.0, 2.1]}
+                }
+                result = evaluate_paired_metric(
+                    "score",
+                    raw_samples["score"]["baseline"],
+                    raw_samples["score"]["candidate"],
+                    "higher_better",
+                    1.5,
+                    seed=42,
+                    iterations=100,
+                    data_classification="external_live",
+                )
+                metric = {
+                    "evaluator": "paired_bootstrap/v1",
+                    "evaluator_sha256": "e" * 64,
+                    "deterministic": True,
+                    "summary_only": False,
+                    "raw_samples": raw_samples,
+                    "raw_metric_digest": api_canonical_sha256(raw_samples),
+                    "results": [result.model_dump(mode="json")],
+                    "gpu_receipt": {
+                        "source": "gpu",
+                        "operation": "gpu-job-status",
+                        "method": "POST",
+                        "endpoint": "/mcp/gpu/job-status",
+                        "http_status": 200,
+                        "request_sha256": "1" * 64,
+                        "response_sha256": "2" * 64,
+                        "response_identifier": "gpu-job-fixture",
+                    },
+                    "synthetic": False,
+                }
+                contents[task.task_id] = canonical_json(metric).encode()
+            elif task.stage != "VERIFY":
+                contents[task.task_id] = ("output:%s" % task.task_id).encode()
+
+        reviewed_artifacts = sorted(
+            {
+                hashlib.sha256(content).hexdigest()
+                for task_id, content in contents.items()
+                if next(task for task in run.task_graph if task.task_id == task_id).stage
+                in evidence_stages
+            }
+        )
+        reviewed_producers = sorted(
+            {
+                task.assigned_worker
+                for task in run.task_graph
+                if task.stage in evidence_stages
+            }
+        )
+        for task in run.task_graph:
+            if task.stage == "VERIFY":
+                review = {
+                    "reviewer_id": task.assigned_worker,
+                    "reviewed_producers": reviewed_producers,
+                    "reviewed_artifact_sha256": reviewed_artifacts,
+                    "independent": True,
+                    "verdict": "PASS",
+                    "findings": [],
+                    "synthetic": False,
+                }
+                contents[task.task_id] = canonical_json(review).encode()
+
         nodes = []
         details = []
         for task in run.task_graph:
             primary = "shared/tasks/%s/output.bin" % task.task_id
             envelope_path = "shared/tasks/%s/result.ego-envelope.json" % task.task_id
-            content = ("output:%s" % task.task_id).encode()
+            content = contents[task.task_id]
             self.artifacts[primary] = content
             envelope = {
                 "schema": "egoagentos.agentteams-result.v1",

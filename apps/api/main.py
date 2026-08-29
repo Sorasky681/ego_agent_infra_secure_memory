@@ -18,7 +18,10 @@ from .models import (
     AdvanceRequest,
     ApprovalDecisionRequest,
     AutorunRequest,
+    CreateTaskRequest,
     DemoResetRequest,
+    EvidenceIngestRequest,
+    FinalizeTaskRequest,
     RXPVerifyRequest,
 )
 from .provenance import canonical_sha256
@@ -125,7 +128,7 @@ def create_app(
             "Evidence-gated, deterministic control plane for multi-agent embodied-AI research. "
             "The bundled EgoLite run is explicitly synthetic."
         ),
-        version="0.1.0",
+        version="0.2.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -256,6 +259,23 @@ def create_app(
         items = request.app.state.service.list_tasks()
         return {"items": items, "total": len(items)}
 
+    @application.post("/api/v1/tasks", tags=["research"], status_code=201)
+    def create_task(
+        body: CreateTaskRequest,
+        request: Request,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        key = _idempotency_key(idempotency_key, body.idempotency_key)
+        body_json = body.model_dump(mode="json", exclude={"idempotency_key"})
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/tasks",
+            key,
+            body_json,
+            lambda: request.app.state.service.create_live_task(body),
+        )
+
     @application.get("/api/v1/tasks/{task_id}", tags=["research"])
     def task(task_id: str, request: Request) -> Dict[str, Any]:
         return request.app.state.service.get_task(task_id)
@@ -316,6 +336,44 @@ def create_app(
             key,
             body_json,
             lambda: request.app.state.service.autorun(task_id, payload.approval_token),
+        )
+
+    @application.post("/api/v1/tasks/{task_id}/evidence", tags=["research", "evidence"])
+    def ingest_evidence(
+        task_id: str,
+        body: EvidenceIngestRequest,
+        request: Request,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        key = _idempotency_key(idempotency_key, body.idempotency_key)
+        body_json = body.model_dump(mode="json", exclude={"idempotency_key"}, by_alias=True)
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/tasks/%s/evidence" % task_id,
+            key,
+            body_json,
+            lambda: request.app.state.service.ingest_live_evidence(
+                task_id, body.evidence, body.expected_task_version
+            ),
+        )
+
+    @application.post("/api/v1/tasks/{task_id}/finalize", tags=["research", "evidence"])
+    def finalize_task(
+        task_id: str,
+        body: FinalizeTaskRequest,
+        request: Request,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> Dict[str, Any]:
+        key = _idempotency_key(idempotency_key, body.idempotency_key)
+        body_json = body.model_dump(mode="json", exclude={"idempotency_key"}, by_alias=True)
+        return _run_idempotent(
+            request.app.state.service,
+            "POST",
+            "/api/v1/tasks/%s/finalize" % task_id,
+            key,
+            body_json,
+            lambda: request.app.state.service.finalize_live_task(task_id, body),
         )
 
     @application.post("/api/v1/approvals/{approval_id}/decision", tags=["approval"])

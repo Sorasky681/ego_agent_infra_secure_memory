@@ -68,6 +68,33 @@ class BridgeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_bridge_events_run
                     ON bridge_events(run_id, sequence);
+                CREATE TABLE IF NOT EXISTS bridge_receipts (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_id TEXT NOT NULL UNIQUE,
+                    run_id TEXT NOT NULL,
+                    receipt_key TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    previous_hash TEXT NOT NULL,
+                    receipt_hash TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES bridge_runs(id),
+                    UNIQUE(run_id, receipt_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_bridge_receipts_run
+                    ON bridge_receipts(run_id, sequence);
+                CREATE TRIGGER IF NOT EXISTS bridge_receipts_no_update
+                BEFORE UPDATE ON bridge_receipts
+                BEGIN
+                    SELECT RAISE(ABORT, 'bridge receipts are immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS bridge_receipts_no_delete
+                BEFORE DELETE ON bridge_receipts
+                BEGIN
+                    SELECT RAISE(ABORT, 'bridge receipts are immutable');
+                END;
                 """
             )
 
@@ -268,6 +295,138 @@ class BridgeStore:
                     "created_at": row["created_at"],
                 }
             )
+        return {"items": items, "total": len(items), "chain_valid": chain_valid}
+
+    @staticmethod
+    def _receipt_row(row: sqlite3.Row, *, idempotent_replay: bool = False) -> Dict[str, Any]:
+        return {
+            "sequence": row["sequence"],
+            "receipt_id": row["receipt_id"],
+            "run_id": row["run_id"],
+            "receipt_key": row["receipt_key"],
+            "source": row["source"],
+            "kind": row["kind"],
+            "payload": json.loads(row["payload_json"]),
+            "payload_sha256": row["payload_sha256"],
+            "previous_hash": row["previous_hash"],
+            "receipt_hash": row["receipt_hash"],
+            "created_at": row["created_at"],
+            "idempotent_replay": idempotent_replay,
+        }
+
+    def archive_receipt(
+        self,
+        run_id: str,
+        *,
+        receipt_key: str,
+        source: str,
+        kind: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Append one raw upstream receipt, replaying only byte-equivalent content.
+
+        The public method returns ordinary dictionaries, keeping persistence consumers
+        independent of SQLite row objects so another backend can implement the same surface.
+        """
+
+        self.get_run(run_id)
+        payload_json = canonical_json(payload)
+        payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT * FROM bridge_receipts WHERE run_id = ? AND receipt_key = ?",
+                (run_id, receipt_key),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["payload_sha256"] != payload_sha256
+                    or existing["source"] != source
+                    or existing["kind"] != kind
+                ):
+                    raise BridgeError(
+                        "receipt_key_conflict",
+                        "A receipt key was replayed with different upstream content",
+                        details={"run_id": run_id, "receipt_key": receipt_key},
+                    )
+                return self._receipt_row(existing, idempotent_replay=True)
+            previous = self._connection.execute(
+                """
+                SELECT receipt_hash FROM bridge_receipts
+                WHERE run_id = ? ORDER BY sequence DESC LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            previous_hash = previous["receipt_hash"] if previous is not None else ZERO_HASH
+            receipt_id = "rcpt_%s" % uuid.uuid4().hex
+            created_at = utc_now().isoformat()
+            hash_payload = {
+                "receipt_id": receipt_id,
+                "run_id": run_id,
+                "receipt_key": receipt_key,
+                "source": source,
+                "kind": kind,
+                "payload_sha256": payload_sha256,
+                "previous_hash": previous_hash,
+                "created_at": created_at,
+            }
+            receipt_hash = hashlib.sha256(
+                canonical_json(hash_payload).encode("utf-8")
+            ).hexdigest()
+            self._connection.execute(
+                """
+                INSERT INTO bridge_receipts(
+                    receipt_id, run_id, receipt_key, source, kind, payload_json,
+                    payload_sha256, previous_hash, receipt_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt_id,
+                    run_id,
+                    receipt_key,
+                    source,
+                    kind,
+                    payload_json,
+                    payload_sha256,
+                    previous_hash,
+                    receipt_hash,
+                    created_at,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM bridge_receipts WHERE receipt_id = ?", (receipt_id,)
+            ).fetchone()
+            if row is None:
+                raise BridgeError("receipt_missing", "Archived receipt could not be reloaded")
+            return self._receipt_row(row)
+
+    def receipts(self, run_id: str) -> Dict[str, Any]:
+        self.get_run(run_id)
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM bridge_receipts WHERE run_id = ? ORDER BY sequence", (run_id,)
+            ).fetchall()
+        items: List[Dict[str, Any]] = []
+        expected_previous = ZERO_HASH
+        chain_valid = True
+        for row in rows:
+            item = self._receipt_row(row)
+            hash_payload = {
+                "receipt_id": item["receipt_id"],
+                "run_id": item["run_id"],
+                "receipt_key": item["receipt_key"],
+                "source": item["source"],
+                "kind": item["kind"],
+                "payload_sha256": item["payload_sha256"],
+                "previous_hash": item["previous_hash"],
+                "created_at": item["created_at"],
+            }
+            expected_hash = hashlib.sha256(
+                canonical_json(hash_payload).encode("utf-8")
+            ).hexdigest()
+            if item["previous_hash"] != expected_previous or item["receipt_hash"] != expected_hash:
+                chain_valid = False
+            expected_previous = item["receipt_hash"]
+            items.append(item)
         return {"items": items, "total": len(items), "chain_valid": chain_valid}
 
     def active_runs(self) -> List[BridgeRun]:

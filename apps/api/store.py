@@ -315,6 +315,38 @@ class SQLiteStore:
             finally:
                 self._close(connection)
 
+    def create_task(self, task: TaskRecord) -> None:
+        """Insert a user-owned task without the demo reset/upsert semantics."""
+
+        serialized = task.model_dump_json()
+        with self._lock:
+            connection = self._connect()
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO tasks(id, generation, version, task_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task.id,
+                        task.generation,
+                        task.version,
+                        serialized,
+                        task.created_at.isoformat(),
+                        task.updated_at.isoformat(),
+                    ),
+                )
+                self._commit(connection)
+            except sqlite3.IntegrityError as error:
+                self._rollback(connection)
+                raise ConflictError(
+                    "task_already_exists",
+                    "A task with this id already exists; live task creation never overwrites it",
+                    {"task_id": task.id},
+                ) from error
+            finally:
+                self._close(connection)
+
     def save_task(self, task: TaskRecord, expected_version: int) -> None:
         with self._lock:
             connection = self._connect()

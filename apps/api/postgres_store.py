@@ -245,6 +245,39 @@ class PostgresStore:
         finally:
             self._close(connection)
 
+    def create_task(self, task: TaskRecord) -> None:
+        """Insert a user-owned task without overwriting an existing tenant task."""
+
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                INSERT INTO tasks(
+                    id, tenant_id, generation, version, task_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(tenant_id, id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    task.id,
+                    self.tenant_id,
+                    task.generation,
+                    task.version,
+                    Jsonb(task.model_dump(mode="json")),
+                    task.created_at,
+                    task.updated_at,
+                ),
+            ).fetchone()
+            if row is None:
+                raise ConflictError(
+                    "task_already_exists",
+                    "A task with this id already exists; live task creation never overwrites it",
+                    {"task_id": task.id},
+                )
+            self._commit(connection)
+        finally:
+            self._close(connection)
+
     def save_task(self, task: TaskRecord, expected_version: int) -> None:
         connection = self._connect()
         try:

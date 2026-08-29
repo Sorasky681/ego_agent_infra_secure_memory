@@ -241,11 +241,18 @@ class AgentTeamsBridge:
 
     def _send(self, run: BridgeRun, envelope: CollaborationEnvelope) -> str:
         room_id, leader_matrix_id = self._leader_context(run)
-        event_id = self.matrix.send_envelope(
+        event_id, receipt = self.matrix.send_envelope_with_receipt(
             room_id=room_id,
             leader_matrix_id=leader_matrix_id,
             envelope=envelope.model_dump(mode="json", by_alias=True),
             transaction_id=envelope.envelope_id,
+        )
+        self.store.archive_receipt(
+            run.id,
+            receipt_key="matrix:%s" % envelope.envelope_id,
+            source="matrix",
+            kind="raw-message",
+            payload=receipt,
         )
         self.store.append_event(run.id, envelope)
         return event_id
@@ -273,8 +280,84 @@ class AgentTeamsBridge:
                 "result_envelope_suffix": ".ego-envelope.json",
                 "result_schema": "egoagentos.agentteams-result.v1",
                 "no_chat_approval": True,
+                "primary_artifact_contract": {
+                    "synthetic": False,
+                    "evidence_by_stage": {
+                        "CONTEXT": ["dataset_manifest"],
+                        "PLAN": ["config"],
+                        "EXECUTE": ["code"],
+                        "OBSERVE": ["log", "trace"],
+                        "EVALUATE": ["metric"],
+                        "VERIFY": ["review"],
+                    },
+                    "EVALUATE_required_json_fields": [
+                        "evaluator",
+                        "evaluator_sha256",
+                        "deterministic=true",
+                        "summary_only=false",
+                        "raw_samples",
+                        "raw_metric_digest",
+                        "results",
+                        "gpu_receipt",
+                        "synthetic=false",
+                    ],
+                    "VERIFY_required_json_fields": [
+                        "reviewer_id",
+                        "reviewed_producers",
+                        "reviewed_artifact_sha256",
+                        "independent=true",
+                        "verdict=PASS",
+                        "findings",
+                        "synthetic=false",
+                    ],
+                    "review_rule": (
+                        "reviewed_artifact_sha256 must equal the exact effective non-review "
+                        "artifact byte-digest set; superseded attempts are excluded"
+                    ),
+                },
             },
         }
+
+    @staticmethod
+    def _validate_ego_live_binding(
+        request: StartRunRequest, ego_task: Dict[str, Any]
+    ) -> None:
+        if ego_task.get("synthetic_demo") is not False:
+            raise BridgeError(
+                "synthetic_task_rejected",
+                "Live AgentTeams work requires an explicitly non-synthetic EgoAgentOS task",
+                details={"task_id": request.ego_task_id},
+            )
+        if ego_task.get("scenario") != "external_live":
+            raise BridgeError(
+                "ego_live_contract_missing",
+                "EgoAgentOS task is not an external_live task created by the live API",
+                details={"scenario": ego_task.get("scenario")},
+            )
+        expected_source = {
+            "source": "agentteams",
+            "team": request.team,
+            "trace_id": request.trace_id,
+            "correlation_id": request.correlation_id,
+            "context_version": request.context_version,
+        }
+        if ego_task.get("live_source") != expected_source:
+            raise BridgeError(
+                "ego_live_binding_conflict",
+                "AgentTeams run identity does not match the task's frozen live source binding",
+                details={"expected": expected_source, "actual": ego_task.get("live_source")},
+            )
+        if ego_task.get("objective") != request.objective:
+            raise BridgeError(
+                "ego_objective_conflict",
+                "AgentTeams objective differs from the frozen EgoAgentOS objective",
+            )
+        if ego_task.get("stage") != "INTAKE":
+            raise BridgeError(
+                "ego_task_not_at_intake",
+                "A new live bridge run must begin from the EgoAgentOS INTAKE stage",
+                details={"stage": ego_task.get("stage")},
+            )
 
     def start_run(self, request: StartRunRequest) -> BridgeRun:
         project_id = _safe_project_id(request.ego_task_id, request.context_version)
@@ -313,12 +396,7 @@ class AgentTeamsBridge:
 
         live_probe = self.probe_live(request.team)
         ego_task = self.ego.get_task(request.ego_task_id)
-        if bool(ego_task.get("synthetic_demo")):
-            raise BridgeError(
-                "synthetic_task_rejected",
-                "Live AgentTeams work cannot be attached to the synthetic EgoLite demo task",
-                details={"task_id": request.ego_task_id},
-            )
+        self._validate_ego_live_binding(request, ego_task)
         team = self.agentteams.get_team(request.team)
         required_workers = [worker for _, _, worker, _ in ROLE_PLAN]
         required_workers.append(team.leaderName)
@@ -354,14 +432,14 @@ class AgentTeamsBridge:
                 "reassignments": {},
                 "ego_grant_committed": False,
                 "intent_digest": intent_digest,
-                "bridge_api_version": "0.2.0",
+                "bridge_api_version": "0.3.0",
                 "official_main_commit": OFFICIAL_MAIN_COMMIT,
             },
             ack_timeout_seconds=request.ack_timeout_seconds,
             execution_timeout_seconds=request.execution_timeout_seconds,
             max_reassignments=request.max_reassignments,
         )
-        create_response = self.agentteams.create_project(
+        create_response, create_receipt = self.agentteams.create_project_with_receipt(
             project_id=project_id,
             title="EgoAgentOS · %s" % request.objective[:120],
             team=request.team,
@@ -373,6 +451,13 @@ class AgentTeamsBridge:
         checkpoint["project_create_identifier"] = create_response.get("project_id")
         run = run.model_copy(update={"checkpoint": checkpoint})
         run = self.store.create_run(run)
+        self.store.archive_receipt(
+            run.id,
+            receipt_key="agentteams:project-create",
+            source="agentteams",
+            kind="official-response",
+            payload=create_receipt,
+        )
         try:
             workflow = self.agentteams.replan(
                 project_id, request.team, self._controller_tasks(graph)
@@ -426,6 +511,88 @@ class AgentTeamsBridge:
     def get_run(self, run_id: str) -> BridgeRun:
         return self.store.get_run(run_id)
 
+    def acceptance_input_index(self, run_id: str) -> Dict[str, Any]:
+        """Index locally frozen inputs for a later acceptance-bundle assembler.
+
+        This endpoint does not claim that a bundle, attestation, or live run exists.  It
+        only reports the durable bridge material already present for this run.
+        """
+
+        run = self.store.get_run(run_id)
+        events = self.store.events(run_id)
+        receipts = self.store.receipts(run_id)
+        receipt_keys = {item["receipt_key"] for item in receipts["items"]}
+        matrix_receipts = [
+            item["receipt_id"]
+            for item in receipts["items"]
+            if item["source"] == "matrix" and item["kind"] == "raw-message"
+        ]
+        reviewer_receipts = [
+            item["receipt_id"]
+            for item in receipts["items"]
+            if item["kind"] == "reviewer-decision"
+        ]
+        accepted = run.checkpoint.get("accepted_contracts", {})
+        metric_artifacts = [
+            contract.get("primary_artifact")
+            for contract in accepted.values()
+            if isinstance(contract, dict) and contract.get("stage") == "EVALUATE"
+        ]
+        required = {
+            "agentteams:project-create",
+            "ego:live-finalization",
+            "agentteams:project-complete",
+        }
+        inputs_ready = (
+            run.mode == "live"
+            and run.state == RunState.COMPLETED
+            and events["chain_valid"]
+            and receipts["chain_valid"]
+            and required.issubset(receipt_keys)
+            and bool(matrix_receipts)
+            and bool(reviewer_receipts)
+            and bool(metric_artifacts)
+            and run.checkpoint.get("ego_gate_status") == "pass"
+        )
+        return {
+            "schema": "egoagentos.acceptance-input-index/v1",
+            "run_id": run.id,
+            "ego_task_id": run.ego_task_id,
+            "agentteams_project_id": run.agentteams_project_id,
+            "trace_id": run.trace_id,
+            "correlation_id": run.correlation_id,
+            "context_version": run.context_version,
+            "execution_mode": "real-agentteams" if run.mode == "live" else "dry-run",
+            "synthetic": run.mode != "live",
+            "inputs_ready_for_assembly": inputs_ready,
+            "bundle_assembled": False,
+            "integrity": {
+                "bridge_event_chain_valid": events["chain_valid"],
+                "receipt_chain_valid": receipts["chain_valid"],
+                "ego_finalization_receipt_sha256": run.checkpoint.get(
+                    "ego_finalization_receipt_sha256"
+                ),
+            },
+            "indexed": {
+                "receipt_keys": sorted(receipt_keys),
+                "matrix_receipt_ids": matrix_receipts,
+                "reviewer_receipt_ids": reviewer_receipts,
+                "metric_artifacts": metric_artifacts,
+                "accepted_contracts": accepted,
+            },
+            "exports": {
+                "bridge_events": "/api/v1/agentteams/runs/%s/events" % run.id,
+                "upstream_receipts": "/api/v1/agentteams/runs/%s/receipts" % run.id,
+                "ego_task": "/api/v1/tasks/%s" % run.ego_task_id,
+                "ego_events": "/api/v1/tasks/%s/events" % run.ego_task_id,
+                "skill_evidence": "/api/v1/agentteams/runs/%s/skill-evidence" % run.id,
+            },
+            "assembly_boundary": (
+                "Inputs are indexed only. A separate collector must fetch both services, "
+                "redact secrets, write acceptance-input.json, and build/verify the immutable bundle."
+            ),
+        }
+
     @staticmethod
     def _detail_by_id(workflow: WorkflowResponse) -> Dict[str, TaskDetail]:
         return {detail.task_id: detail for detail in workflow.tasks_detail}
@@ -444,7 +611,7 @@ class AgentTeamsBridge:
 
     def _validate_task_contract(
         self, run: BridgeRun, detail: TaskDetail
-    ) -> Tuple[WorkerResultEnvelope, str]:
+    ) -> Tuple[WorkerResultEnvelope, str, Dict[str, Any]]:
         paths = self._deliverable_paths(detail)
         envelope_paths = [path for path in paths if path.endswith(".ego-envelope.json")]
         if len(envelope_paths) != 1:
@@ -453,8 +620,16 @@ class AgentTeamsBridge:
                 "Completed AgentTeams task must declare exactly one .ego-envelope.json artifact",
                 details={"task_id": detail.task_id, "deliverables": paths},
             )
-        raw = self.agentteams.task_artifact(
+        raw, envelope_receipt = self.agentteams.task_artifact_with_receipt(
             run.agentteams_project_id, run.team, detail.task_id, envelope_paths[0]
+        )
+        envelope_receipt_key = "agentteams:artifact:%s:result-envelope" % detail.task_id
+        self.store.archive_receipt(
+            run.id,
+            receipt_key=envelope_receipt_key,
+            source="agentteams",
+            kind="official-artifact-response",
+            payload=envelope_receipt,
         )
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -514,8 +689,16 @@ class AgentTeamsBridge:
                 "Result envelope primary artifact is not declared in AgentTeams TaskMeta",
                 details={"task_id": detail.task_id, "path": primary},
             )
-        primary_bytes = self.agentteams.task_artifact(
+        primary_bytes, primary_receipt = self.agentteams.task_artifact_with_receipt(
             run.agentteams_project_id, run.team, detail.task_id, primary
+        )
+        primary_receipt_key = "agentteams:artifact:%s:primary" % detail.task_id
+        self.store.archive_receipt(
+            run.id,
+            receipt_key=primary_receipt_key,
+            source="agentteams",
+            kind="official-artifact-response",
+            payload=primary_receipt,
         )
         actual_digest = hashlib.sha256(primary_bytes).hexdigest()
         if actual_digest != envelope.output_sha256:
@@ -528,7 +711,90 @@ class AgentTeamsBridge:
                     "actual": actual_digest,
                 },
             )
-        return envelope, hashlib.sha256(raw).hexdigest()
+        if task_spec and task_spec.stage in {"EVALUATE", "VERIFY"}:
+            content = primary_receipt.get("response_body")
+            if not isinstance(content, dict):
+                raise BridgeError(
+                    "typed_scientific_artifact_missing",
+                    "%s task primary artifact must be a JSON object" % task_spec.stage,
+                    details={"task_id": detail.task_id, "path": primary},
+                )
+            if content.get("synthetic") is not False:
+                raise BridgeError(
+                    "synthetic_scientific_artifact_rejected",
+                    "Live metric/review artifacts must explicitly declare synthetic=false",
+                    details={"task_id": detail.task_id},
+                )
+            if task_spec.stage == "EVALUATE":
+                required_metric = {
+                    "evaluator",
+                    "evaluator_sha256",
+                    "deterministic",
+                    "summary_only",
+                    "raw_samples",
+                    "raw_metric_digest",
+                    "results",
+                    "gpu_receipt",
+                }
+                missing_metric = required_metric - set(content)
+                if (
+                    missing_metric
+                    or content.get("deterministic") is not True
+                    or content.get("summary_only") is not False
+                ):
+                    raise BridgeError(
+                        "metric_artifact_contract_invalid",
+                        "Evaluator artifact lacks deterministic raw-metric fields",
+                        details={"task_id": detail.task_id, "missing": sorted(missing_metric)},
+                    )
+            else:
+                required_review = {
+                    "reviewer_id",
+                    "reviewed_producers",
+                    "reviewed_artifact_sha256",
+                    "independent",
+                    "verdict",
+                }
+                missing_review = required_review - set(content)
+                if (
+                    missing_review
+                    or content.get("reviewer_id") != task_spec.assigned_worker
+                    or content.get("independent") is not True
+                    or content.get("verdict") != "PASS"
+                ):
+                    raise BridgeError(
+                        "reviewer_decision_invalid",
+                        "VERIFY artifact is not an independent PASS from its assigned reviewer",
+                        details={"task_id": detail.task_id, "missing": sorted(missing_review)},
+                    )
+                self.store.archive_receipt(
+                    run.id,
+                    receipt_key="reviewer:%s" % detail.task_id,
+                    source="agentteams",
+                    kind="reviewer-decision",
+                    payload={
+                        "task_id": detail.task_id,
+                        "assigned_worker": task_spec.assigned_worker,
+                        "decision": content,
+                        "artifact_response_sha256": primary_receipt["response_sha256"],
+                        "result_envelope_sha256": hashlib.sha256(raw).hexdigest(),
+                    },
+                )
+        return (
+            envelope,
+            hashlib.sha256(raw).hexdigest(),
+            {
+                "path": primary,
+                "content_sha256": actual_digest,
+                "size_bytes": len(primary_bytes),
+                "media_type": (
+                    primary_receipt.get("response_headers", {}).get("content-type")
+                    or "application/octet-stream"
+                ),
+                "receipt_key": primary_receipt_key,
+                "receipt_response_sha256": primary_receipt["response_sha256"],
+            },
+        )
 
     def _observe_statuses(
         self, run: BridgeRun, workflow: WorkflowResponse
@@ -795,7 +1061,9 @@ class AgentTeamsBridge:
             if detail.result_status not in SUCCESS_RESULT_STATUSES:
                 return task, "result_status=%s" % detail.result_status, None
             try:
-                envelope, artifact_hash = self._validate_task_contract(run, detail)
+                envelope, artifact_hash, primary_artifact = self._validate_task_contract(
+                    run, detail
+                )
             except BridgeError as error:
                 suggested = None
                 if error.code == "worker_reported_conflict":
@@ -806,6 +1074,10 @@ class AgentTeamsBridge:
                 "output_sha256": envelope.output_sha256,
                 "review_verdict": envelope.review_verdict,
                 "independent_review": envelope.independent_review,
+                "assigned_worker": task.assigned_worker,
+                "assigned_to": task.assigned_to,
+                "stage": task.stage,
+                "primary_artifact": primary_artifact,
                 "accepted_at": _iso_now(self.clock),
             }
             run.checkpoint["accepted_contracts"] = accepted
@@ -858,6 +1130,355 @@ class AgentTeamsBridge:
         return bool(tasks) and all(
             nodes.get(task.task_id) == "completed" and task.task_id in accepted for task in tasks
         )
+
+    @staticmethod
+    def _assert_ego_run_binding(run: BridgeRun, task: Dict[str, Any]) -> None:
+        expected = {
+            "source": "agentteams",
+            "team": run.team,
+            "trace_id": run.trace_id,
+            "correlation_id": run.correlation_id,
+            "context_version": run.context_version,
+        }
+        if task.get("synthetic_demo") is not False or task.get("live_source") != expected:
+            raise BridgeError(
+                "ego_live_binding_conflict",
+                "EgoAgentOS task no longer matches the persisted live run identity",
+                details={"expected": expected, "actual": task.get("live_source")},
+            )
+
+    def _advance_ego_to_approval(self, run: BridgeRun) -> Tuple[BridgeRun, Dict[str, Any]]:
+        task = self.ego.get_task(run.ego_task_id)
+        self._assert_ego_run_binding(run, task)
+        stages = ["INTAKE", "CONTEXT", "PLAN", "PLAN_REVIEW", "APPROVAL"]
+        if task.get("stage") not in stages:
+            raise BridgeError(
+                "ego_preapproval_stage_conflict",
+                "EgoAgentOS task is outside the pre-approval lifecycle",
+                details={"stage": task.get("stage")},
+            )
+        actions: List[Dict[str, Any]] = []
+        index = stages.index(str(task["stage"]))
+        for target in stages[index + 1 :]:
+            response, receipt = self.ego.advance_stage_with_receipt(
+                run.ego_task_id,
+                target,
+                "bridge-%s-%s" % (run.id, target.lower()),
+            )
+            advanced_task = response.get("task") if isinstance(response, dict) else None
+            if not isinstance(advanced_task, dict) or advanced_task.get("stage") != target:
+                raise BridgeError(
+                    "ego_stage_transition_unverified",
+                    "EgoAgentOS returned success without the requested live stage",
+                    details={"target": target, "observed": advanced_task},
+                )
+            task = advanced_task
+            self._assert_ego_run_binding(run, task)
+            self.store.archive_receipt(
+                run.id,
+                receipt_key="ego:stage:%s" % target.lower(),
+                source="egoagentos",
+                kind="control-plane-response",
+                payload=receipt,
+            )
+            actions.append({"action": "ego_stage_advanced", "target": target})
+        pending = task.get("pending_approval") if isinstance(task, dict) else None
+        if task.get("stage") != "APPROVAL" or not isinstance(pending, dict):
+            raise BridgeError(
+                "ego_approval_contract_missing",
+                "EgoAgentOS did not expose a typed pending approval after PLAN_REVIEW",
+            )
+        checkpoint = dict(run.checkpoint)
+        checkpoint["ego_generation"] = task.get("generation")
+        checkpoint["ego_task_version"] = task.get("version")
+        checkpoint["ego_approval_id"] = pending.get("id")
+        return run.model_copy(update={"checkpoint": checkpoint}), {
+            "action": "ego_waiting_r2",
+            "approval_id": pending.get("id"),
+            "transitions": actions,
+        }
+
+    @staticmethod
+    def _control_receipt(payload: Dict[str, Any]) -> Dict[str, Any]:
+        required = {
+            "source",
+            "operation",
+            "method",
+            "endpoint",
+            "http_status",
+            "request_sha256",
+            "response_sha256",
+            "response_identifier",
+        }
+        missing = required - set(payload)
+        if missing:
+            raise BridgeError(
+                "upstream_receipt_incomplete",
+                "Archived upstream receipt is missing control-plane fields",
+                details={"missing": sorted(missing)},
+            )
+        return {key: payload[key] for key in sorted(required)}
+
+    def _build_finalization_evidence(
+        self, run: BridgeRun, ego_task: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        receipt_bundle = self.store.receipts(run.id)
+        if not receipt_bundle["chain_valid"]:
+            raise BridgeError(
+                "receipt_chain_invalid",
+                "Bridge upstream receipt chain failed verification",
+            )
+        receipts = {
+            item["receipt_key"]: item for item in receipt_bundle["items"]
+        }
+        accepted: Dict[str, Dict[str, Any]] = run.checkpoint.get("accepted_contracts", {})
+        stage_kinds = {
+            "CONTEXT": ("dataset_manifest",),
+            "PLAN": ("config",),
+            "EXECUTE": ("code",),
+            "OBSERVE": ("log", "trace"),
+            "EVALUATE": ("metric",),
+            "VERIFY": ("review",),
+        }
+        items: Dict[str, Dict[str, Any]] = {}
+        raw_artifact_digests: Dict[str, str] = {}
+        review_source: Optional[Tuple[ResearchTaskSpec, Dict[str, Any], Dict[str, Any]]] = None
+        matrix_messages = [
+            item["payload"]
+            for item in receipt_bundle["items"]
+            if item["source"] == "matrix" and item["kind"] == "raw-message"
+        ]
+        for task in self._effective_tasks(run):
+            kinds = stage_kinds.get(task.stage)
+            if not kinds:
+                continue
+            contract = accepted.get(task.task_id)
+            if not isinstance(contract, dict):
+                raise BridgeError(
+                    "accepted_contract_missing",
+                    "Finalization lacks an accepted AgentTeams artifact contract",
+                    details={"task_id": task.task_id, "stage": task.stage},
+                )
+            artifact = contract.get("primary_artifact")
+            if not isinstance(artifact, dict):
+                raise BridgeError(
+                    "accepted_artifact_missing",
+                    "Accepted contract does not identify its primary artifact",
+                    details={"task_id": task.task_id},
+                )
+            receipt_item = receipts.get(str(artifact.get("receipt_key")))
+            if receipt_item is None:
+                raise BridgeError(
+                    "artifact_receipt_missing",
+                    "Accepted artifact has no persisted official response receipt",
+                    details={"task_id": task.task_id},
+                )
+            raw_receipt = receipt_item["payload"]
+            official_receipt = self._control_receipt(raw_receipt)
+            artifact_ref = {
+                "uri": "agentteams://%s/%s/%s"
+                % (run.agentteams_project_id, task.task_id, artifact["path"]),
+                "media_type": artifact["media_type"],
+                "content_sha256": artifact["content_sha256"],
+                "size_bytes": artifact["size_bytes"],
+            }
+            raw_artifact_digests[task.stage] = artifact["content_sha256"]
+            if task.stage == "EVALUATE":
+                content = raw_receipt.get("response_body")
+                if not isinstance(content, dict):
+                    raise BridgeError(
+                        "metric_artifact_body_missing",
+                        "Archived evaluator response does not contain the raw JSON artifact",
+                    )
+                gpu_receipt = content.get("gpu_receipt")
+                if not isinstance(gpu_receipt, dict):
+                    raise BridgeError(
+                        "gpu_receipt_missing",
+                        "Evaluator artifact did not bind a GPU execution receipt",
+                    )
+                payload = {
+                    "schema": "egoagentos.external-metric-evidence/v1",
+                    "stage": "EVALUATE",
+                    "artifact": artifact_ref,
+                    "receipts": [official_receipt, self._control_receipt(gpu_receipt)],
+                    "evaluator": content.get("evaluator"),
+                    "evaluator_sha256": content.get("evaluator_sha256"),
+                    "deterministic": content.get("deterministic"),
+                    "summary_only": content.get("summary_only"),
+                    "raw_samples": content.get("raw_samples"),
+                    "raw_metric_digest": content.get("raw_metric_digest"),
+                    "results": content.get("results"),
+                    "attributes": {
+                        "agentteams_project_id": run.agentteams_project_id,
+                        "agentteams_task_id": task.task_id,
+                        "assigned_worker": task.assigned_worker,
+                    },
+                    "synthetic": False,
+                }
+            elif task.stage == "VERIFY":
+                content = raw_receipt.get("response_body")
+                if not isinstance(content, dict):
+                    raise BridgeError(
+                        "review_artifact_body_missing",
+                        "Archived reviewer response does not contain the raw JSON decision",
+                    )
+                review_source = (task, content, {"artifact": artifact_ref, "receipt": official_receipt})
+                continue
+            else:
+                source_stage = task.stage
+                payload = {
+                    "schema": "egoagentos.external-artifact-evidence/v1",
+                    "stage": source_stage,
+                    "artifact": artifact_ref,
+                    "receipts": [official_receipt],
+                    "attributes": {
+                        "agentteams_project_id": run.agentteams_project_id,
+                        "agentteams_task_id": task.task_id,
+                        "assigned_worker": task.assigned_worker,
+                    },
+                    "synthetic": False,
+                }
+            for kind in kinds:
+                item_payload = dict(payload)
+                if kind == "trace":
+                    attributes = payload.get("attributes")
+                    if not isinstance(attributes, dict):
+                        raise BridgeError(
+                            "trace_attributes_missing",
+                            "Trace evidence wrapper lacks structured attributes",
+                        )
+                    item_payload["attributes"] = {
+                        **attributes,
+                        "matrix_raw_messages": matrix_messages,
+                        "bridge_receipt_chain_head": (
+                            receipt_bundle["items"][-1]["receipt_hash"]
+                            if receipt_bundle["items"]
+                            else None
+                        ),
+                    }
+                    item_payload["receipts"] = [
+                        official_receipt,
+                        *[
+                            self._control_receipt(message)
+                            for message in matrix_messages
+                        ],
+                    ]
+                items[kind] = {
+                    "generation": ego_task["generation"],
+                    "kind": kind,
+                    "producer_id": task.assigned_worker,
+                    "artifact_digest": canonical_sha256(item_payload),
+                    "payload": item_payload,
+                    "synthetic": False,
+                }
+
+        expected_non_review = {"dataset_manifest", "config", "code", "log", "trace", "metric"}
+        if set(items) != expected_non_review or review_source is None:
+            raise BridgeError(
+                "terminal_evidence_incomplete",
+                "Accepted AgentTeams tasks did not produce all terminal evidence kinds",
+                details={"present": sorted(items), "required": sorted(expected_non_review)},
+            )
+        review_task, review_content, review_binding = review_source
+        expected_artifact_digests = set(raw_artifact_digests.values()) - {
+            raw_artifact_digests.get("VERIFY", "")
+        }
+        if set(review_content.get("reviewed_artifact_sha256", [])) != expected_artifact_digests:
+            raise BridgeError(
+                "review_artifact_set_mismatch",
+                "Reviewer decision did not bind the exact upstream artifact set",
+                details={
+                    "expected": sorted(expected_artifact_digests),
+                    "actual": sorted(review_content.get("reviewed_artifact_sha256", [])),
+                },
+            )
+        review_payload = {
+            "schema": "egoagentos.external-review-evidence/v1",
+            "stage": "VERIFY",
+            "artifact": review_binding["artifact"],
+            "receipts": [review_binding["receipt"]],
+            "reviewer_id": review_content.get("reviewer_id"),
+            "reviewed_producers": review_content.get("reviewed_producers"),
+            "independent": review_content.get("independent"),
+            "verdict": review_content.get("verdict"),
+            "reviewed_evidence_digests": sorted(
+                item["artifact_digest"] for item in items.values()
+            ),
+            "findings": review_content.get("findings", []),
+            "attributes": {
+                "agentteams_project_id": run.agentteams_project_id,
+                "agentteams_task_id": review_task.task_id,
+                "raw_reviewer_decision_sha256": canonical_sha256(review_content),
+            },
+            "synthetic": False,
+        }
+        items["review"] = {
+            "generation": ego_task["generation"],
+            "kind": "review",
+            "producer_id": review_task.assigned_worker,
+            "artifact_digest": canonical_sha256(review_payload),
+            "payload": review_payload,
+            "synthetic": False,
+        }
+        return [items[kind] for kind in sorted(items)]
+
+    def _finalize_ego(self, run: BridgeRun) -> Tuple[BridgeRun, Dict[str, Any]]:
+        checkpoint = dict(run.checkpoint)
+        if checkpoint.get("ego_finalization_committed"):
+            task = self.ego.get_task(run.ego_task_id)
+            self._assert_ego_run_binding(run, task)
+            if task.get("stage") != "COMPLETED" or task.get("gate_result", {}).get("status") != "pass":
+                raise BridgeError(
+                    "ego_finalization_checkpoint_conflict",
+                    "Persisted finalization receipt no longer matches EgoAgentOS terminal state",
+                )
+            return run, task
+        task = self.ego.get_task(run.ego_task_id)
+        self._assert_ego_run_binding(run, task)
+        if task.get("stage") != "EXECUTE":
+            raise BridgeError(
+                "ego_task_not_at_execute",
+                "Terminal evidence may be ingested only after the R2 grant reached EXECUTE",
+                details={"stage": task.get("stage")},
+            )
+        body = {
+            "generation": task.get("generation"),
+            "expected_task_version": task.get("version"),
+            "evidence": self._build_finalization_evidence(run, task),
+            "terminal_actor": task.get("owner_agent"),
+        }
+        response, receipt = self.ego.finalize_live(
+            run.ego_task_id,
+            body,
+            "bridge-finalize-%s-v%d" % (run.id, run.context_version),
+        )
+        terminal = response.get("task") if isinstance(response, dict) else None
+        if (
+            not isinstance(terminal, dict)
+            or terminal.get("synthetic_demo") is not False
+            or terminal.get("stage") != "COMPLETED"
+            or terminal.get("gate_result", {}).get("status") != "pass"
+            or terminal.get("decision") not in {"KEEP", "DROP", "INCONCLUSIVE"}
+        ):
+            raise BridgeError(
+                "ego_finalization_unverified",
+                "EgoAgentOS did not return a valid evidence-gated terminal task",
+                details={"observed": terminal},
+            )
+        archived = self.store.archive_receipt(
+            run.id,
+            receipt_key="ego:live-finalization",
+            source="egoagentos",
+            kind="terminal-finalization",
+            payload=receipt,
+        )
+        checkpoint["ego_finalization_committed"] = True
+        checkpoint["ego_finalization_receipt_sha256"] = archived["payload_sha256"]
+        checkpoint["ego_decision"] = terminal["decision"]
+        checkpoint["ego_gate_status"] = terminal["gate_result"]["status"]
+        checkpoint["ego_terminal_version"] = terminal.get("version")
+        updated = run.model_copy(update={"checkpoint": checkpoint})
+        return self.store.update_run(updated, expected_version=run.version), terminal
 
     def _recover_compensation(
         self, run: BridgeRun, workflow: WorkflowResponse
@@ -945,10 +1566,12 @@ class AgentTeamsBridge:
                     "agentteams_status": workflow.status,
                     "accepted_contracts": run.checkpoint.get("accepted_contracts", {}),
                     "recovered": True,
-                    "claim_boundary": (
-                        "AgentTeams collaboration completed. Scientific KEEP/DROP remains "
-                        "an EgoAgentOS evidence-gate decision."
+                    "ego_decision": run.checkpoint.get("ego_decision"),
+                    "ego_gate_status": run.checkpoint.get("ego_gate_status"),
+                    "ego_finalization_receipt_sha256": run.checkpoint.get(
+                        "ego_finalization_receipt_sha256"
                     ),
+                    "claim_boundary": "EgoAgentOS decision is bound to typed live evidence.",
                 },
             )
             matrix_event_id = self._send(run, envelope)
@@ -979,7 +1602,17 @@ class AgentTeamsBridge:
             )
         if run.state in {RunState.BLOCKED, RunState.COMPLETED}:
             return ReconcileResult(run=run, live=True, actions=[])
-        workflow = self.agentteams.workflow(run.agentteams_project_id, run.team)
+        workflow, workflow_receipt = self.agentteams.workflow_with_receipt(
+            run.agentteams_project_id, run.team
+        )
+        self.store.archive_receipt(
+            run.id,
+            receipt_key="agentteams:workflow:%s"
+            % workflow_receipt["response_sha256"],
+            source="agentteams",
+            kind="official-workflow-snapshot",
+            payload=workflow_receipt,
+        )
         if workflow.project_id != run.agentteams_project_id or workflow.team_id != run.team:
             raise BridgeError(
                 "workflow_identity_conflict",
@@ -1011,6 +1644,8 @@ class AgentTeamsBridge:
         elif run.state == RunState.PRE_APPROVAL and self._all_stage_tasks_completed(
             run, workflow, PRE_APPROVAL_STAGES
         ):
+            run, ego_action = self._advance_ego_to_approval(run)
+            actions.append(ego_action)
             paused = self.agentteams.pause(
                 run.agentteams_project_id,
                 run.team,
@@ -1072,7 +1707,17 @@ class AgentTeamsBridge:
         elif run.state == RunState.POST_APPROVAL and self._all_stage_tasks_completed(
             run, workflow, POST_APPROVAL_STAGES
         ):
-            completed = self.agentteams.complete(run.agentteams_project_id, run.team)
+            run, terminal_task = self._finalize_ego(run)
+            completed, complete_receipt = self.agentteams.complete_with_receipt(
+                run.agentteams_project_id, run.team
+            )
+            self.store.archive_receipt(
+                run.id,
+                receipt_key="agentteams:project-complete",
+                source="agentteams",
+                kind="official-response",
+                payload=complete_receipt,
+            )
             run = run.model_copy(update={"state": RunState.COMPLETED})
             envelope = self._envelope(
                 run,
@@ -1080,10 +1725,13 @@ class AgentTeamsBridge:
                 {
                     "agentteams_status": completed.status,
                     "accepted_contracts": run.checkpoint.get("accepted_contracts", {}),
-                    "claim_boundary": (
-                        "AgentTeams collaboration completed. Scientific KEEP/DROP remains "
-                        "an EgoAgentOS evidence-gate decision."
-                    ),
+                    "ego_stage": terminal_task["stage"],
+                    "ego_decision": terminal_task["decision"],
+                    "ego_gate_status": terminal_task["gate_result"]["status"],
+                    "ego_finalization_receipt_sha256": run.checkpoint[
+                        "ego_finalization_receipt_sha256"
+                    ],
+                    "claim_boundary": "EgoAgentOS decision is bound to typed live evidence.",
                 },
             )
             try:

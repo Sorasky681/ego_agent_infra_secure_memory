@@ -9,6 +9,7 @@ import pytest
 from apps.agentteams_bridge.errors import BridgeError, UpstreamError
 from apps.agentteams_bridge.models import GrantRequest, RunState, StartRunRequest
 from apps.agentteams_bridge.transport import TransportFailure
+from apps.api.models import FinalizeTaskRequest
 from integrations.agentteams.benchmark_adapter import (
     REQUIRED_TRACE_EVENTS,
     TRACE_SCHEMA_VERSION,
@@ -16,13 +17,20 @@ from integrations.agentteams.benchmark_adapter import (
     _build_verified_trace,
     _write_trace,
 )
+from tests.agentteams.conftest import (
+    LIVE_CORRELATION_ID,
+    LIVE_OBJECTIVE,
+    LIVE_TRACE_ID,
+)
 
 
 def _start(bridge):
     return bridge.start_run(
         StartRunRequest(
             ego_task_id="task-live",
-            objective="Run a bounded embodied-AI ablation with independent review",
+            objective=LIVE_OBJECTIVE,
+            trace_id=LIVE_TRACE_ID,
+            correlation_id=LIVE_CORRELATION_ID,
             ack_timeout_seconds=5,
             execution_timeout_seconds=30,
         )
@@ -55,6 +63,62 @@ def test_live_start_uses_controller_team_workers_project_and_matrix(bridge, fake
     events = bridge.store.events(run.id)
     assert events["chain_valid"] is True
     assert events["items"][0]["kind"] == "TASK_REQUEST"
+    receipts = bridge.store.receipts(run.id)
+    assert receipts["chain_valid"] is True
+    assert {item["receipt_key"] for item in receipts["items"]} >= {
+        "agentteams:project-create",
+    }
+    matrix_receipt = next(item for item in receipts["items"] if item["source"] == "matrix")
+    assert matrix_receipt["payload"]["request_body"]["com.egoagentos.envelope"]["kind"] == (
+        "TASK_REQUEST"
+    )
+    assert "matrix-token" not in json.dumps(receipts)
+
+
+def test_live_start_rejects_unbound_or_implicitly_synthetic_ego_tasks(
+    bridge, fake_transport
+) -> None:
+    fake_transport.ego_task.pop("live_source")
+    with pytest.raises(BridgeError) as missing_binding:
+        _start(bridge)
+    assert missing_binding.value.code == "ego_live_binding_conflict"
+
+    fake_transport.ego_task["synthetic_demo"] = None
+    with pytest.raises(BridgeError) as implicit_truth:
+        _start(bridge)
+    assert implicit_truth.value.code == "synthetic_task_rejected"
+
+
+def test_receipt_archive_is_idempotent_but_rejects_key_content_conflicts(
+    bridge,
+) -> None:
+    run = _start(bridge)
+    payload = {"event_id": "$same", "raw": {"body": "message"}}
+    first = bridge.store.archive_receipt(
+        run.id,
+        receipt_key="test:receipt",
+        source="matrix",
+        kind="raw-message",
+        payload=payload,
+    )
+    replay = bridge.store.archive_receipt(
+        run.id,
+        receipt_key="test:receipt",
+        source="matrix",
+        kind="raw-message",
+        payload=payload,
+    )
+    assert first["receipt_hash"] == replay["receipt_hash"]
+    assert replay["idempotent_replay"] is True
+    with pytest.raises(BridgeError) as conflict:
+        bridge.store.archive_receipt(
+            run.id,
+            receipt_key="test:receipt",
+            source="matrix",
+            kind="raw-message",
+            payload={"event_id": "$different"},
+        )
+    assert conflict.value.code == "receipt_key_conflict"
 
 
 @pytest.mark.parametrize(
@@ -108,6 +172,14 @@ def test_completed_preapproval_tasks_pause_at_real_r2_gate(bridge, fake_transpor
     assert any(action["action"] == "r2_paused" for action in result.actions)
     assert any(call["path"].endswith("/pause") for call in fake_transport.calls)
     assert bridge.store.events(run.id)["chain_valid"] is True
+    assert fake_transport.ego_task["stage"] == "APPROVAL"
+    assert fake_transport.ego_task["pending_approval"]["id"] == "apr-live-fixture"
+    ego_stage_targets = [
+        call["json"]["target"]
+        for call in fake_transport.calls
+        if call["path"] == "/api/v1/tasks/task-live/advance"
+    ]
+    assert ego_stage_targets == ["CONTEXT", "PLAN", "PLAN_REVIEW", "APPROVAL"]
 
 
 def test_r2_grant_consumes_ego_token_then_resumes_replans_and_never_persists_token(
@@ -282,12 +354,12 @@ def test_matrix_failure_at_r2_pause_enters_and_recovers_compensation(
 ) -> None:
     run = _start(bridge)
     fake_transport.complete_all_with_contracts(run)
-    original_send = bridge.matrix.send_envelope
+    original_send = bridge.matrix.send_envelope_with_receipt
 
     def fail_send(**_kwargs):
         raise UpstreamError("matrix", "send-envelope", 503, "offline")
 
-    monkeypatch.setattr(bridge.matrix, "send_envelope", fail_send)
+    monkeypatch.setattr(bridge.matrix, "send_envelope_with_receipt", fail_send)
     fenced = bridge.reconcile(run.id)
     assert fenced.run.state == RunState.COMPENSATION_REQUIRED
     assert fenced.run.checkpoint["compensation_retry"]["operation"] == (
@@ -295,12 +367,107 @@ def test_matrix_failure_at_r2_pause_enters_and_recovers_compensation(
     )
     assert any(action["action"] == "compensation_required" for action in fenced.actions)
 
-    monkeypatch.setattr(bridge.matrix, "send_envelope", original_send)
+    monkeypatch.setattr(bridge.matrix, "send_envelope_with_receipt", original_send)
     recovered = bridge.reconcile(run.id)
     assert recovered.run.state == RunState.WAITING_R2
     assert recovered.actions[0]["action"] == "compensation_recovered"
     assert "compensation_retry" not in recovered.run.checkpoint
 
+
+def test_terminal_matrix_failure_recovers_without_replaying_ego_finalization(
+    bridge, fake_transport, monkeypatch
+) -> None:
+    run = _start(bridge)
+    fake_transport.complete_all_with_contracts(run)
+    run = bridge.reconcile(run.id).run
+    fake_transport.ego_task = {
+        **fake_transport.ego_task,
+        "pending_approval": {
+            **fake_transport.ego_task["pending_approval"],
+            "status": "approved",
+            "approver": "human-operator",
+        },
+    }
+    run = bridge.grant_r2(
+        run.id,
+        GrantRequest(
+            approval_token="terminal-compensation-token",
+            idempotency_key="terminal-grant-0001",
+        ),
+    )
+    fake_transport.complete_all_with_contracts(run)
+    original_send = bridge.matrix.send_envelope_with_receipt
+
+    def fail_terminal(**kwargs):
+        if kwargs["envelope"]["kind"] == "TERMINAL":
+            raise UpstreamError("matrix", "send-envelope", 503, "one-shot outage")
+        return original_send(**kwargs)
+
+    monkeypatch.setattr(bridge.matrix, "send_envelope_with_receipt", fail_terminal)
+    fenced = bridge.reconcile(run.id)
+    assert fenced.run.state == RunState.COMPENSATION_REQUIRED
+    assert fenced.run.checkpoint["ego_finalization_committed"] is True
+    assert fenced.run.checkpoint["compensation_retry"]["operation"] == "terminal-notify"
+    assert len(fake_transport.finalization_requests) == 1
+
+    monkeypatch.setattr(bridge.matrix, "send_envelope_with_receipt", original_send)
+    recovered = bridge.reconcile(run.id)
+    assert recovered.run.state == RunState.COMPLETED
+    assert recovered.actions[0]["action"] == "compensation_recovered"
+    assert len(fake_transport.finalization_requests) == 1
+
+
+def test_bridge_refuses_terminal_claim_when_ego_gate_is_not_verified(
+    bridge, fake_transport, monkeypatch
+) -> None:
+    run = _start(bridge)
+    fake_transport.complete_all_with_contracts(run)
+    run = bridge.reconcile(run.id).run
+    fake_transport.ego_task = {
+        **fake_transport.ego_task,
+        "pending_approval": {
+            **fake_transport.ego_task["pending_approval"],
+            "status": "approved",
+            "approver": "human-operator",
+        },
+    }
+    run = bridge.grant_r2(
+        run.id,
+        GrantRequest(
+            approval_token="gate-failure-token",
+            idempotency_key="gate-failure-grant",
+        ),
+    )
+    fake_transport.complete_all_with_contracts(run)
+
+    def invalid_finalization(*_args, **_kwargs):
+        return (
+            {
+                "task": {
+                    **fake_transport.ego_task,
+                    "stage": "COMPLETED",
+                    "decision": "KEEP",
+                    "gate_result": {"status": "fail"},
+                }
+            },
+            {"response_sha256": "f" * 64},
+        )
+
+    monkeypatch.setattr(bridge.ego, "finalize_live", invalid_finalization)
+    complete_calls_before = sum(
+        call["path"].endswith("/complete") for call in fake_transport.calls
+    )
+    with pytest.raises(BridgeError) as rejected:
+        bridge.reconcile(run.id)
+    assert rejected.value.code == "ego_finalization_unverified"
+    assert bridge.get_run(run.id).state == RunState.POST_APPROVAL
+    assert sum(call["path"].endswith("/complete") for call in fake_transport.calls) == (
+        complete_calls_before
+    )
+    assert not any(
+        item["receipt_key"] == "ego:live-finalization"
+        for item in bridge.store.receipts(run.id)["items"]
+    )
 
 def test_skill_evidence_distinguishes_assignment_authorization_and_tool_use(
     bridge, fake_transport
@@ -376,6 +543,31 @@ def test_verified_benchmark_trace_has_required_real_agentteams_evidence(
     fake_transport.complete_all_with_contracts(run)
     run = bridge.reconcile(run.id).run
     assert run.state == RunState.COMPLETED
+    assert len(fake_transport.finalization_requests) == 1
+    finalization = FinalizeTaskRequest.model_validate(fake_transport.finalization_requests[0])
+    assert {item.kind.value for item in finalization.evidence} == {
+        "code",
+        "config",
+        "dataset_manifest",
+        "log",
+        "metric",
+        "trace",
+        "review",
+    }
+    trace_item = next(item for item in finalization.evidence if item.kind.value == "trace")
+    assert trace_item.payload.attributes["matrix_raw_messages"]
+    receipts = bridge.store.receipts(run.id)
+    assert receipts["chain_valid"] is True
+    assert any(item["kind"] == "reviewer-decision" for item in receipts["items"])
+    assert any(item["receipt_key"] == "ego:live-finalization" for item in receipts["items"])
+    assert any(item["receipt_key"] == "agentteams:project-complete" for item in receipts["items"])
+    acceptance_index = bridge.acceptance_input_index(run.id)
+    assert acceptance_index["inputs_ready_for_assembly"] is True
+    assert acceptance_index["bundle_assembled"] is False
+    assert acceptance_index["indexed"]["matrix_receipt_ids"]
+    assert acceptance_index["indexed"]["reviewer_receipt_ids"]
+    assert acceptance_index["indexed"]["metric_artifacts"]
+    assert "separate collector" in acceptance_index["assembly_boundary"]
 
     fake_transport.spawns_payload = {
         "project_id": run.agentteams_project_id,
@@ -460,7 +652,7 @@ def test_verified_benchmark_trace_has_required_real_agentteams_evidence(
     }
     assert {event["actor"] for event in trace["events"]} <= declared_actors
     assert trace["bridge_event_chain"]["total"] == len(trace["events"])
-    assert trace["bridge"]["api_version"] == "0.2.0"
+    assert trace["bridge"]["api_version"] == "0.3.0"
     assert trace["bridge"]["benchmark_adapter_version"] == "rxp-bench/v1"
     assert trace["official_contract"]["main_commit"] == (
         "223ddc2b8073e4c8b93bcbb15e1d717f196c04d9"

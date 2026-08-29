@@ -41,7 +41,7 @@ def build_service(settings: Optional[BridgeSettings] = None) -> AgentTeamsBridge
 def create_app(service: Optional[AgentTeamsBridge] = None) -> FastAPI:
     application = FastAPI(
         title="EgoAgentOS AgentTeams Bridge",
-        version="0.2.0",
+        version="0.3.0",
         description=(
             "Durable bridge to the official AgentTeams Controller, TeamHarness workflow, "
             "and Matrix delivery plane. Dry-run responses are never reported as live."
@@ -105,6 +105,23 @@ def create_app(service: Optional[AgentTeamsBridge] = None) -> FastAPI:
     @application.get("/api/v1/agentteams/runs/{run_id}/events")
     def events(run_id: str, request: Request) -> Dict[str, Any]:
         return request.app.state.bridge.store.events(run_id)
+
+    @application.get("/api/v1/agentteams/runs/{run_id}/receipts")
+    def receipts(run_id: str, request: Request) -> Dict[str, Any]:
+        payload = request.app.state.bridge.store.receipts(run_id)
+        return {
+            **payload,
+            "schema": "egoagentos.agentteams-upstream-receipts/v1",
+            "append_only": True,
+            "contains_raw_matrix_messages": any(
+                item["source"] == "matrix" and item["kind"] == "raw-message"
+                for item in payload["items"]
+            ),
+        }
+
+    @application.get("/api/v1/agentteams/runs/{run_id}/acceptance-input-index")
+    def acceptance_input_index(run_id: str, request: Request) -> Dict[str, Any]:
+        return request.app.state.bridge.acceptance_input_index(run_id)
 
     @application.get("/api/v1/agentteams/runs/{run_id}/skill-evidence")
     def skills(run_id: str, request: Request) -> Dict[str, Any]:
