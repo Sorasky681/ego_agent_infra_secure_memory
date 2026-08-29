@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from fractions import Fraction
 import hashlib
 import io
 import json
@@ -91,6 +92,59 @@ def _tree_manifest(root: Path) -> Dict[str, Any]:
         "files": entries,
         "total_bytes": total_bytes,
     }
+
+
+def _acceptance_metric_artifacts(raw: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any], Dict[str, Any]]:
+    """Project predictions into the semifinal bundle's exact sample-by-cell contract."""
+
+    cells = (
+        ("cell-baseline-fp32", "baseline_pred"),
+        ("cell-candidate-amp", "candidate_pred"),
+    )
+    records: List[Dict[str, Any]] = []
+    sample_ids: List[str] = []
+    total = 0
+    for row in raw["samples"]:
+        sample_id = "fashion-mnist-test-%06d" % int(row["sample_id"])
+        sample_ids.append(sample_id)
+        for cell_id, prediction_field in cells:
+            value = int(int(row[prediction_field]) == int(row["target"]))
+            total += value
+            records.append(
+                {
+                    "record_id": "%s:%s" % (sample_id, cell_id),
+                    "sample_id": sample_id,
+                    "cell_id": cell_id,
+                    "metric_name": "classification_correct",
+                    "value_scaled": value,
+                    "included": True,
+                    "filter_id": None,
+                }
+            )
+    raw_bytes = b"".join(canonical_bytes(record) + b"\n" for record in records)
+    mean = Fraction(total, len(records))
+    summary = {
+        "metric_name": "classification_correct",
+        "scale": 1,
+        "aggregation": "mean",
+        "included_n": len(records),
+        "filtered_n": 0,
+        "sum_scaled": total,
+        "mean_scaled_fraction": "%d/%d" % (mean.numerator, mean.denominator),
+        "raw_metrics_sha256": "sha256:%s" % hashlib.sha256(raw_bytes).hexdigest(),
+    }
+    contract = {
+        "metric_name": "classification_correct",
+        "scale": 1,
+        "aggregation": "mean",
+        "sample_ids": sample_ids,
+        "matrix_cells": [
+            {"cell_id": "cell-baseline-fp32", "seed": int(raw["config"]["seed"])},
+            {"cell_id": "cell-candidate-amp", "seed": int(raw["config"]["seed"])},
+        ],
+        "declared_filters": [],
+    }
+    return raw_bytes, summary, contract
 
 
 def _deadline_guard(started: float, max_seconds: int) -> None:
@@ -500,6 +554,9 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
     trace_path = output_root / "trace.jsonl"
     model_path = output_root / "model-state.bin"
     telemetry_path = output_root / "gpu-telemetry.jsonl"
+    matrix_metrics_path = output_root / "accuracy-matrix.jsonl"
+    matrix_summary_path = output_root / "accuracy-summary.json"
+    metric_contract_path = output_root / "metric-contract.json"
     raw_path.write_bytes(canonical_bytes(raw) + b"\n")
     decision_path.write_bytes(canonical_bytes(decision) + b"\n")
     trace_path.write_text(
@@ -516,6 +573,10 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
         ),
         encoding="utf-8",
     )
+    matrix_metric_bytes, matrix_summary, metric_contract = _acceptance_metric_artifacts(raw)
+    matrix_metrics_path.write_bytes(matrix_metric_bytes)
+    matrix_summary_path.write_bytes(canonical_bytes(matrix_summary) + b"\n")
+    metric_contract_path.write_bytes(canonical_bytes(metric_contract) + b"\n")
     manifest = file_manifest(
         output_root,
         [
@@ -525,6 +586,9 @@ def execute(arguments: argparse.Namespace) -> Dict[str, Any]:
             trace_path,
             model_path,
             telemetry_path,
+            matrix_metrics_path,
+            matrix_summary_path,
+            metric_contract_path,
         ],
     )
     manifest["artifact_root"] = canonical_sha256(manifest["files"])

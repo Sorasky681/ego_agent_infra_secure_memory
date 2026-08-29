@@ -18,7 +18,7 @@ from experiments.fashion_mnist_amp.contract import (
     validate_config,
 )
 from experiments.fashion_mnist_amp.verify import main as verify_main
-from experiments.fashion_mnist_amp.run import _GPUTelemetry
+from experiments.fashion_mnist_amp.run import _GPUTelemetry, _acceptance_metric_artifacts
 
 
 def config_fixture() -> dict[str, object]:
@@ -288,3 +288,21 @@ def test_gpu_telemetry_uses_fixed_argv_and_one_job_identity(
     assert records[0]["memory_used_bytes"] == 128 * 1024 * 1024
     assert all(call[0][-1] == "--id=GPU-test-uuid" for call in calls)
     assert all(call[1]["shell"] is False for call in calls)
+
+
+def test_predictions_project_to_complete_acceptance_metric_matrix() -> None:
+    raw = raw_fixture()
+    raw_bytes, summary, contract = _acceptance_metric_artifacts(raw)
+    records = [json.loads(line) for line in raw_bytes.splitlines()]
+
+    assert len(records) == 64
+    assert len({(record["sample_id"], record["cell_id"]) for record in records}) == 64
+    assert {record["cell_id"] for record in records} == {
+        "cell-baseline-fp32",
+        "cell-candidate-amp",
+    }
+    assert summary["sum_scaled"] == 64
+    assert summary["mean_scaled_fraction"] == "1/1"
+    assert summary["raw_metrics_sha256"] == "sha256:%s" % hashlib.sha256(raw_bytes).hexdigest()
+    assert len(contract["sample_ids"]) == 32
+    assert len(contract["matrix_cells"]) == 2
