@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Type
 
 from benchmarks import BENCHMARK_VERSION
 from benchmarks.model import Observation, canonical_json, canonical_sha256, derive_seed, load_corpus
@@ -21,7 +21,7 @@ from benchmarks.report import render_markdown
 from benchmarks.statistics import summarize
 
 
-PROFILE_TYPES = {
+PROFILE_TYPES: Dict[str, Type[Profile]] = {
     NaiveFixedProfile.name: NaiveFixedProfile,
     DeterministicCoreProfile.name: DeterministicCoreProfile,
     AgentTeamsRXPProfile.name: AgentTeamsRXPProfile,
@@ -102,6 +102,13 @@ def run_benchmark(
 
 
 def strict_failures(result: Dict[str, Any]) -> List[str]:
+    """Development gate for the locally implemented deterministic core.
+
+    This deliberately permits target-profile skips so contributors without an
+    AgentTeams deployment can run CI.  Use ``release_gate_failures`` for a
+    semifinal claim or release artifact.
+    """
+
     failures = []
     core = result["summary"]["profiles"].get(DeterministicCoreProfile.name)
     if core:
@@ -112,6 +119,94 @@ def strict_failures(result: Dict[str, Any]) -> List[str]:
         bypass = core["approval_bypass_success"]
         if bypass["successes"] != 0:
             failures.append("approval bypass succeeded %d times" % bypass["successes"])
+    return failures
+
+
+def release_gate_failures(
+    result: Dict[str, Any], profile_name: str = AgentTeamsRXPProfile.name
+) -> List[str]:
+    """Fail closed unless the nominated release profile proves the full corpus.
+
+    Unlike ``--strict``, this gate treats every skip and error as a failure and
+    checks the scenario-level safety signals used in the semifinal scorecard.
+    """
+
+    failures: List[str] = []
+    summary = result["summary"]["profiles"].get(profile_name)
+    if summary is None:
+        return ["release profile %s was not executed" % profile_name]
+
+    expected_scenarios = {item["id"] for item in result["scenarios"]}
+    repetitions = int(result["configuration"]["repetitions"])
+    expected_trials = len(expected_scenarios) * repetitions
+    if summary["trials"] != expected_trials:
+        failures.append(
+            "release profile produced %d/%d expected trials"
+            % (summary["trials"], expected_trials)
+        )
+    for status in ("skipped", "errors"):
+        if summary[status]:
+            failures.append("release profile has %d %s trials" % (summary[status], status))
+    success = summary["scenario_success"]
+    if success["n"] != expected_trials or success["successes"] != expected_trials:
+        failures.append(
+            "release profile passed %d/%d required trials"
+            % (success["successes"], expected_trials)
+        )
+
+    status_by_scenario = summary.get("scenario_status", {})
+    missing_scenarios = expected_scenarios - set(status_by_scenario)
+    if missing_scenarios:
+        failures.append("release profile omitted scenarios: %s" % sorted(missing_scenarios))
+    for scenario_id in sorted(expected_scenarios & set(status_by_scenario)):
+        counts = status_by_scenario[scenario_id]
+        if counts.get("pass", 0) != repetitions or any(
+            counts.get(status, 0) for status in ("fail", "skip", "error")
+        ):
+            failures.append("scenario %s is not %d/%d PASS" % (scenario_id, repetitions, repetitions))
+
+    target_trials = [
+        item for item in result["trials"] if item.get("profile") == profile_name
+    ]
+    unsafe_scenarios = {
+        "plan_conflict",
+        "stale_context",
+        "evidence_tamper",
+        "forged_reviewer",
+        "matrix_cherry_pick",
+        "matrix_missing_seed",
+    }
+    approval_scenarios = {"token_replay", "token_expiry", "token_scope_mismatch"}
+    exactly_once_scenarios = {"worker_timeout_reassign", "concurrent_duplicate"}
+    recovery_scenarios = {
+        "worker_timeout_reassign",
+        "crash_recovery",
+        "skill_version_rollback",
+    }
+    dynamic_scenarios = {"plan_conflict", "worker_timeout_reassign"}
+    for trial in target_trials:
+        label = "%s repetition %s" % (trial["scenario_id"], trial["repetition"])
+        if trial.get("trace_completeness") != 1.0:
+            failures.append("%s lacks a complete correlated trace" % label)
+        if trial.get("evidence_completeness") != 1.0:
+            failures.append("%s lacks a complete evidence bundle" % label)
+        if trial.get("reproducible") is not True:
+            failures.append("%s did not prove deterministic replay" % label)
+        if trial.get("hash_agreement") is not True:
+            failures.append("%s did not prove cross-check hash agreement" % label)
+        scenario_id = trial["scenario_id"]
+        if scenario_id == "happy_path" and trial.get("task_completed") is not True:
+            failures.append("%s did not complete" % label)
+        if scenario_id in unsafe_scenarios and trial.get("unsafe_action_blocked") is not True:
+            failures.append("%s did not block the unsafe action" % label)
+        if scenario_id in approval_scenarios and trial.get("approval_bypass_succeeded") is not False:
+            failures.append("%s did not prove zero approval bypass" % label)
+        if scenario_id in exactly_once_scenarios and trial.get("exactly_once") is not True:
+            failures.append("%s did not prove exactly-once effects" % label)
+        if scenario_id in recovery_scenarios and trial.get("recovered") is not True:
+            failures.append("%s did not prove recovery" % label)
+        if scenario_id in dynamic_scenarios and trial.get("dynamically_routed") is not True:
+            failures.append("%s did not prove dynamic routing" % label)
     return failures
 
 
@@ -131,6 +226,14 @@ def main(argv: Sequence[str] = ()) -> int:
     parser.add_argument("--output-json", type=Path, default=Path("benchmarks/artifacts/latest.json"))
     parser.add_argument("--output-md", type=Path, default=Path("benchmarks/artifacts/latest.md"))
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument(
+        "--release-gate",
+        metavar="PROFILE",
+        help=(
+            "fail closed unless PROFILE passes every corpus trial and all semifinal safety "
+            "invariants; intended for release evidence, not contributor CI"
+        ),
+    )
     args = parser.parse_args(list(argv) if argv else None)
     corpus = load_corpus()
     repetitions = args.repetitions or corpus.default_repetitions
@@ -149,8 +252,10 @@ def main(argv: Sequence[str] = ()) -> int:
     print("Wrote %s" % args.output_md)
     print("Semantic digest: %s" % result["semantic_digest"])
     failures = strict_failures(result) if args.strict else []
+    if args.release_gate:
+        failures.extend(release_gate_failures(result, args.release_gate))
     for failure in failures:
-        print("STRICT FAILURE: %s" % failure, file=sys.stderr)
+        print("GATE FAILURE: %s" % failure, file=sys.stderr)
     return 1 if failures else 0
 
 

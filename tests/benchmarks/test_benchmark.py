@@ -7,7 +7,7 @@ import pytest
 from benchmarks.model import canonical_json, canonical_sha256, derive_seed, load_corpus
 from benchmarks.profiles import AgentTeamsRXPProfile, DeterministicCoreProfile, NaiveFixedProfile
 from benchmarks.report import render_markdown
-from benchmarks.runner import run_benchmark, strict_failures
+from benchmarks.runner import release_gate_failures, run_benchmark, strict_failures
 
 
 def test_corpus_is_versioned_unique_and_seeded() -> None:
@@ -87,3 +87,19 @@ def test_agentteams_pass_requires_three_roles_and_digest_bound_trace(tmp_path: P
             {"status": "pass", "details": {**details, "trace_sha256": "0" * 64}},
             tmp_path,
         )
+
+
+def test_release_gate_fails_closed_on_target_skips() -> None:
+    result = run_benchmark([AgentTeamsRXPProfile()], 1, 20260829)
+    failures = release_gate_failures(result)
+    assert failures
+    assert any("skipped" in failure for failure in failures)
+    assert any("passed 0/14" in failure for failure in failures)
+
+
+def test_development_strict_gate_does_not_mislabel_naive_profile_as_safe() -> None:
+    result = run_benchmark([NaiveFixedProfile()], 1, 20260829)
+    assert strict_failures(result) == []
+    assert release_gate_failures(result) == [
+        "release profile agentteams-rxp-target was not executed"
+    ]

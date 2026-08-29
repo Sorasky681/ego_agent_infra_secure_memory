@@ -87,7 +87,7 @@ def summarize(observations: List[Observation]) -> Dict[str, Any]:
         latency = [item.latency_ms for item in executed]
         mttr = [item.mttr_ms for item in executed if item.mttr_ms is not None]
         costs = [item.external_cost_usd for item in executed if item.external_cost_usd is not None]
-        profile_summary = {
+        profile_summary: Dict[str, Any] = {
             "trials": len(all_trials),
             "executed": len(executed),
             "skipped": sum(item.status == "skip" for item in all_trials),

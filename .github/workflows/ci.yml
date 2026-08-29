@@ -119,6 +119,9 @@ jobs:
       - name: Lint benchmark
         run: uv run --python 3.9 --extra dev --locked ruff check benchmarks tests/benchmarks
 
+      - name: Type-check benchmark
+        run: uv run --python 3.9 --extra dev --locked mypy benchmarks
+
       - name: Run strict benchmark smoke suite
         run: >-
           uv run --python 3.9 --extra dev --locked python -m benchmarks.runner

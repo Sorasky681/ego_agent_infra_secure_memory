@@ -27,10 +27,14 @@ check-api:
 test-benchmark:
 	$(UV) run --python 3.9 --extra dev pytest tests/benchmarks
 	$(UV) run --python 3.9 --extra dev ruff check benchmarks tests/benchmarks
+	$(UV) run --python 3.9 --extra dev mypy benchmarks
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --repetitions 2 --strict --output-json /tmp/rxp-bench-ci.json --output-md /tmp/rxp-bench-ci.md
 
 benchmark:
 	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --strict
+
+benchmark-release:
+	$(UV) run --python 3.9 --extra dev python -m benchmarks.runner --profiles agentteams-rxp-target --release-gate agentteams-rxp-target
 
 test-web:
 	npm --prefix apps/web test
