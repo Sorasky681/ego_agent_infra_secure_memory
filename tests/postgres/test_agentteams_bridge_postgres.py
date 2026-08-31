@@ -330,6 +330,7 @@ def test_bridge_runtime_role_cannot_mutate_ledgers_or_disable_triggers(
 ) -> None:
     store = PostgresBridgeStore(postgres_url)
     run = store.create_run(_run())
+    authority_run = store.create_run(_extension_run())
     store.append_event(run.id, _envelope(run, 1))
     security_sql = (
         Path(__file__).resolve().parents[2]
@@ -350,10 +351,110 @@ def test_bridge_runtime_role_cannot_mutate_ledgers_or_disable_triggers(
               ),
               has_column_privilege(
                   'egoagentos_bridge_runtime', 'bridge_runs', 'objective', 'UPDATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_extension_events', 'SELECT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_extension_events', 'INSERT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_extension_events', 'UPDATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_extension_events', 'DELETE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_extension_events', 'TRUNCATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_task_leases', 'SELECT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_task_leases', 'INSERT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_task_leases', 'UPDATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_task_leases', 'DELETE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_task_leases', 'TRUNCATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_evaluator_bindings', 'SELECT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_evaluator_bindings', 'INSERT'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_evaluator_bindings', 'UPDATE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_evaluator_bindings', 'DELETE'
+              ),
+              has_table_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_evaluator_bindings', 'TRUNCATE'
+              ),
+              has_column_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_runs', 'campaign_binding', 'UPDATE'
+              ),
+              has_column_privilege(
+                  'egoagentos_bridge_runtime', 'bridge_runs', 'memory_watermark', 'UPDATE'
+              ),
+              has_function_privilege(
+                  'egoagentos_bridge_runtime',
+                  'egoagentos_bridge_guard_extension_insert()',
+                  'EXECUTE'
+              ),
+              has_function_privilege(
+                  'egoagentos_bridge_runtime',
+                  'egoagentos_bridge_notify_extension()',
+                  'EXECUTE'
+              ),
+              has_function_privilege(
+                  'egoagentos_bridge_runtime',
+                  'egoagentos_bridge_scope_allows(text)',
+                  'EXECUTE'
+              ),
+              has_function_privilege(
+                  'egoagentos_bridge_runtime',
+                  'egoagentos_bridge_reject_campaign_rebind()',
+                  'EXECUTE'
               )
             """
         ).fetchone()
-    assert privileges == (True, True, False, False, False, True, False)
+    assert privileges == (
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
 
     forbidden = (
         "UPDATE bridge_events SET kind='tampered' WHERE run_id=%s",
@@ -389,6 +490,7 @@ def test_bridge_runtime_role_cannot_mutate_ledgers_or_disable_triggers(
     runtime_store = PostgresBridgeStore(
         _login_url(postgres_url, login_role, login_password),
         migration_database_url=postgres_url,
+        tenant_id="local-dev",
     )
     assert runtime_store.get_run(run.id).id == run.id
     runtime_store.append_event(run.id, _envelope(run, 2))
@@ -401,6 +503,42 @@ def test_bridge_runtime_role_cannot_mutate_ledgers_or_disable_triggers(
     )
     assert runtime_store.events(run.id)["chain_valid"] is True
     assert runtime_store.receipts(run.id)["chain_valid"] is True
+
+    _populate_complete_authority(runtime_store, authority_run)
+    replay = runtime_store.replay_extension_authority(
+        authority_run.id,
+        project_id=authority_run.agentteams_project_id,
+        configuration_id="D",
+    )
+    assert replay["events"]["total"] == 7
+    assert replay["events"]["chain_valid"] is True
+
+    with psycopg.connect(
+        _login_url(postgres_url, login_role, login_password)
+    ) as runtime_connection:
+        assert runtime_connection.execute(
+            "SELECT count(*) FROM bridge_extension_events"
+        ).fetchone() == (0,)
+        runtime_connection.execute("SET LOCAL egoagentos.tenant_id = 'wrong-tenant'")
+        runtime_connection.execute(
+            "SELECT set_config('egoagentos.project_id', %s, true)",
+            (authority_run.agentteams_project_id,),
+        )
+        assert runtime_connection.execute(
+            "SELECT count(*) FROM bridge_extension_events"
+        ).fetchone() == (0,)
+        runtime_connection.execute("SET LOCAL egoagentos.tenant_id = 'local-dev'")
+        runtime_connection.execute("SET LOCAL egoagentos.project_id = 'wrong-project'")
+        assert runtime_connection.execute(
+            "SELECT count(*) FROM bridge_extension_events"
+        ).fetchone() == (0,)
+        runtime_connection.execute(
+            "SELECT set_config('egoagentos.project_id', %s, true)",
+            (authority_run.agentteams_project_id,),
+        )
+        assert runtime_connection.execute(
+            "SELECT count(*) FROM bridge_extension_events"
+        ).fetchone() == (7,)
 
 
 def test_postgres_campaign_extension_authority_restarts_with_sqlite_parity(
@@ -499,6 +637,13 @@ def test_postgres_extension_history_rejects_update_delete_and_truncate(
     for statement in statements:
         parameters = () if statement.startswith("TRUNCATE") else (run.id,)
         with psycopg.connect(postgres_url, autocommit=True) as connection:
+            connection.execute(
+                "SELECT set_config('egoagentos.tenant_id', 'local-dev', false)"
+            )
+            connection.execute(
+                "SELECT set_config('egoagentos.project_id', %s, false)",
+                (run.agentteams_project_id,),
+            )
             with pytest.raises(psycopg.Error) as raised:
                 connection.execute(statement, parameters)
         assert raised.value.sqlstate == "23000"
