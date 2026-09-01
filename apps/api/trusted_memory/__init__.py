@@ -1,6 +1,14 @@
 """Public evidence-grounded trusted-memory contracts."""
 
 from .capsule import CapsuleItem, EvidenceCapsule, build_evidence_capsule
+from .focus_contracts import (
+    FocusEvidenceCommitment,
+    FocusMemoryQuery,
+    TrustedFocusFact,
+    TrustedMemoryFocusSource,
+    build_focus_evidence_commitment,
+    build_trusted_memory_focus_source,
+)
 from .models import (
     CandidateFact,
     CandidateProposal,
@@ -37,6 +45,8 @@ __all__ = [
     "EvidenceCapsule",
     "FactProvenance",
     "FactScope",
+    "FocusEvidenceCommitment",
+    "FocusMemoryQuery",
     "LegacyMemoryView",
     "LifecycleTransition",
     "LifecycleTransitionCore",
@@ -53,6 +63,10 @@ __all__ = [
     "SupersessionRecordCore",
     "TrustedFact",
     "TrustedFactCore",
+    "TrustedFocusFact",
+    "TrustedMemoryFocusSource",
     "build_evidence_capsule",
+    "build_focus_evidence_commitment",
+    "build_trusted_memory_focus_source",
     "retrieve_exact",
 ]
