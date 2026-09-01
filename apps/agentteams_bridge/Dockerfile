@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml requirements-api.lock ./
 COPY apps ./apps
+COPY benchmarks ./benchmarks
 RUN pip install --no-cache-dir -r requirements-api.lock
 
 ENV EGO_AGENTTEAMS_BRIDGE_DB=/data/bridge.sqlite3

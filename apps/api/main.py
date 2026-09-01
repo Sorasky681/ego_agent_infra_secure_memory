@@ -29,6 +29,11 @@ from .rxp_runtime import demo_ledger, schema_catalog, verify_uploaded_ledger
 from .service import ResearchOpsService
 from .skill_runtime_api import SkillInvokeRequest, create_skill_registry, invoke_skill
 from .store_factory import create_store
+from .trusted_memory.focus_service import (
+    TrustedMemoryFocusService,
+    register_trusted_memory_focus_routes,
+    validate_focus_service_token,
+)
 from protocols.rxp import RXPError
 
 
@@ -117,10 +122,19 @@ def create_app(
     *,
     database_url: Optional[str] = None,
     skills_path: Optional[str] = None,
+    trusted_memory_service_token: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> FastAPI:
     store = create_store(database_url=database_url, sqlite_path=db_path)
     service = ResearchOpsService(store, approval_hmac_secret=approval_hmac_secret)
     skill_registry = create_skill_registry(skills_path)
+    resolved_tenant_id = tenant_id or os.getenv("EGO_TENANT_ID", "local")
+    token = (
+        trusted_memory_service_token
+        if trusted_memory_service_token is not None
+        else os.getenv("EGO_TRUSTED_MEMORY_SERVICE_TOKEN", "")
+    )
+    resolved_focus_token = validate_focus_service_token(token)
 
     application = FastAPI(
         title="EgoAgentOS ResearchOps API",
@@ -128,12 +142,17 @@ def create_app(
             "Evidence-gated, deterministic control plane for multi-agent embodied-AI research. "
             "The bundled EgoLite run is explicitly synthetic."
         ),
-        version="0.2.0",
+        version="0.2.1",
         docs_url="/docs",
         redoc_url="/redoc",
     )
     application.state.service = service
     application.state.skill_registry = skill_registry
+    application.state.trusted_memory_focus_service = TrustedMemoryFocusService(
+        store,
+        tenant_id=resolved_tenant_id,
+    )
+    application.state.trusted_memory_service_token = resolved_focus_token
 
     default_origins = ",".join(
         [
@@ -155,7 +174,12 @@ def create_app(
         allow_origins=origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "Idempotency-Key", "X-Request-ID"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+        ],
         expose_headers=["X-Request-ID"],
     )
 
@@ -193,6 +217,8 @@ def create_app(
             status_code=error.status_code,
             content=_error_payload(request, code, str(error.detail), {}),
         )
+
+    register_trusted_memory_focus_routes(application)
 
     @application.get("/api/v1/health", tags=["system"])
     def health(request: Request) -> Dict[str, Any]:

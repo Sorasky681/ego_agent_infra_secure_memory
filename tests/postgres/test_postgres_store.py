@@ -19,6 +19,14 @@ from apps.api.service import DEMO_TASK_ID, ResearchOpsService
 from apps.api.store_factory import create_store
 
 
+EXPECTED_MIGRATIONS = [
+    "001_control_plane.sql",
+    "002_ledger_boundaries.sql",
+    "003_trusted_memory_core.sql",
+    "004_decision_closure_bytes.sql",
+]
+
+
 def _pause_for_approval(client: TestClient) -> dict[str, Any]:
     response = client.post("/api/v1/tasks/%s/autorun" % DEMO_TASK_ID, json={})
     assert response.status_code == 200, response.text
@@ -299,10 +307,7 @@ def test_migrations_replay_cleanly_and_idempotent_requests_execute_once(postgres
         migrations = connection.execute(
             "SELECT version, sha256 FROM schema_migrations ORDER BY version"
         ).fetchall()
-    assert [row["version"] for row in migrations] == [
-        "001_control_plane.sql",
-        "002_ledger_boundaries.sql",
-    ]
+    assert [row["version"] for row in migrations] == EXPECTED_MIGRATIONS
     assert all(len(row["sha256"]) == 64 for row in migrations)
 
     first_app = create_app(database_url=postgres_url)
